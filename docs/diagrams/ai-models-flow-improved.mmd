@@ -1,0 +1,56 @@
+flowchart TD
+    %% Actors
+    USER(["👤 User"])
+    ZED(["📝 Zed Editor"])
+
+    %% Primary Request Loop (Fast Path)
+    subgraph FAST_PATH ["⚡ Real-time Request Pipeline"]
+        ZED_AGENT["Zed Agent"]
+        LORE_MW["LoreAI Gateway (Port 3207)\n- Context Injection\n- Session Tracker"]
+        DEEPSEEK["DeepSeek V4 Flash\n(Cloud API)"]
+    end
+
+    %% Internal Storage & State
+    subgraph STORAGE ["💾 Lore Data Store"]
+        MD_STORE[".lore.md / Knowledge Base"]
+        VEC_DB["Local Vector/Recall Index"]
+        EVENT_QUEUE["Async Job Queue"]
+    end
+
+    %% Background Workers (Slow Path)
+    subgraph WORKERS ["🛠️ Local Background Engine (Ollama)"]
+        WORKER_EXEC["Worker Runner"]
+        ORNITH["robit/ornith:9b / qwen2.5-coder"]
+
+        INSIGHTS["Session Insights"]
+        COMPRESS["Context Distillation"]
+        RECALL_BUILD["Vector Indexing"]
+    end
+
+    %% Fast Path Connections
+    USER -->|Types/Requests| ZED
+    ZED --> ZED_AGENT
+    ZED_AGENT -->|HTTP POST| LORE_MW
+
+    LORE_MW <-->|Retrieve Active Context| MD_STORE
+    LORE_MW <-->|Fast Vector Search| VEC_DB
+
+    LORE_MW -->|Forward Prompt| DEEPSEEK
+    DEEPSEEK -->|Streamed Response| LORE_MW
+    LORE_MW -->|Streamed Response| ZED_AGENT
+    ZED_AGENT --> ZED
+
+    %% Async Trigger
+    LORE_MW -.->|Log Turn / Event (Non-blocking)| EVENT_QUEUE
+
+    %% Worker Connections
+    EVENT_QUEUE -->|Polls Jobs| WORKER_EXEC
+    WORKER_EXEC -->|Executes via| ORNITH
+
+    ORNITH --> INSIGHTS
+    ORNITH --> COMPRESS
+    ORNITH --> RECALL_BUILD
+
+    INSIGHTS -->|Append Summary| MD_STORE
+    COMPRESS -->|Prune Context| MD_STORE
+    RECALL_BUILD -->|Update Embeddings| VEC_DB
