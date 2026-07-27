@@ -1,5 +1,5 @@
 {
-  "name": "ai-stack",
+  "name": "perfect-ai-stack",
   "version": "0.1.0",
   "private": false,
   "description": "Shared AI proxy stack scripts and config — Lore, LiteLLM, Headroom, lat.md scaffold. One stack for all your projects.",
@@ -7,7 +7,7 @@
   "author": "TuliTheProgrammer",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tulitheprogrammer/ai-stack"
+    "url": "https://github.com/tulitheprogrammer/perfect-ai-stack"
   },
   "bin": {
     "ai-stack": "./bin/ai-stack.sh",

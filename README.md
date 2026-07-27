@@ -12,7 +12,7 @@ Zed → Lore AI Gateway (:3207) → Headroom (:8787) → LiteLLM (:4000) → Dee
 ## Install
 
 ```sh
-npm install -g github:tulitheprogrammer/ai-stack
+npm install -g github:tulitheprogrammer/perfect-ai-stack
 ```
 
 Then:
