@@ -1,4 +1,4 @@
-# ai-stack
+# perfect-ai-stack
 
 **Shared AI proxy stack** — one command to start/stop your local AI middleware.
 
@@ -13,20 +13,12 @@ Zed → Lore AI Gateway (:3207) → Headroom (:8787) → LiteLLM (:4000) → Dee
 
 ```sh
 npm install -g github:tulitheprogrammer/ai-stack
-# or local:
-npm install -g ./packages/ai-stack
-```
-
-Or via git subdirectory in a monorepo:
-
-```sh
-npm install -g github:tulitheprogrammer/pluginizer/packages/ai-stack
 ```
 
 Then:
 
 ```sh
-ai-stack init          # copy config + scripts to ~/.config/ai-stack/
+ai-stack init 
 ```
 
 ## Usage
