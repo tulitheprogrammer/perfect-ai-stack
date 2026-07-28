@@ -11,6 +11,12 @@ Zed → Lore (:3207) → LiteLLM (:4000) → Anthropic / OpenAI / Ollama (host)
 - Docker + Docker Compose (v2)
 - API keys in environment (see below)
 
+## Wizard
+
+First run the interactive setup to configure your API keys:
+
+
+
 ## Quick start
 
 ```sh
@@ -32,6 +38,7 @@ bin/ai-stack start
 | `ai-stack logs`      | Follow combined logs                |
 | `ai-stack ps`        | Show container status               |
 | `ai-stack update`    | Pull latest images and recreate     |
+| `ai-stack wizard`    | Interactive setup for missing env vars        |
 | `ai-stack setup-lat` | Scaffold lat.md in current project  |
 
 ## Environment Variables
