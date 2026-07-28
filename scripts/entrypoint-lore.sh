@@ -6,12 +6,14 @@ set -e
 
 LORE_CHAT_MODEL="${LORE_CHAT_MODEL:-claude-3-5-sonnet}"
 LORE_WORKER_MODEL="${LORE_WORKER_MODEL:-local-llama}"
+LORE_WORKER_API_KEY="${LORE_WORKER_API_KEY:-${LORE_LLM_KEY:-}}"
 LORE_DEBUG="${LORE_DEBUG:-true}"
 
 # Substitute template placeholders
 sed \
   -e "s|{{LORE_CHAT_MODEL}}|$LORE_CHAT_MODEL|g" \
   -e "s|{{LORE_WORKER_MODEL}}|$LORE_WORKER_MODEL|g" \
+  -e "s|{{LORE_WORKER_API_KEY}}|$LORE_WORKER_API_KEY|g" \
   -e "s|{{LORE_DEBUG}}|$LORE_DEBUG|g" \
   /etc/lore/lore.json.template > /etc/lore/lore.json
 

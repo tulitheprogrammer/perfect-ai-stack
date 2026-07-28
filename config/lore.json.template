@@ -8,7 +8,8 @@
   },
   "workerModel": {
     "providerID": "openai",
-    "modelID": "{{LORE_WORKER_MODEL}}"
+    "modelID": "{{LORE_WORKER_MODEL}}",
+    "apiKey": "{{LORE_WORKER_API_KEY}}"
   },
   "debug": {{LORE_DEBUG}}
 }

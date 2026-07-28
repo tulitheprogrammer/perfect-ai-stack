@@ -27,6 +27,7 @@ services:
       - LORE_LLM_KEY=${LORE_LLM_KEY:-${OPENAI_API_KEY}}
       - LORE_CHAT_MODEL=${LORE_CHAT_MODEL:-claude-3-5-sonnet}
       - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-local-llama}
+      - LORE_WORKER_API_KEY=${LORE_WORKER_API_KEY:-}
       - LORE_DEBUG=${LORE_DEBUG:-true}
     command: ["/bin/sh", "/scripts/entrypoint-lore.sh"]
     restart: unless-stopped
