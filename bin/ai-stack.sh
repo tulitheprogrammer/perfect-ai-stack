@@ -133,6 +133,12 @@ case "$CMD" in
 
     if command -v lore >/dev/null 2>&1; then
       echo "Starting Lore (host)..."
+
+      # Point Lore at LiteLLM unless user explicitly set these
+      export LORE_UPSTREAM_OPENAI="${LORE_UPSTREAM_OPENAI:-http://localhost:4000/v1}"
+      export LORE_UPSTREAM_ANTHROPIC="${LORE_UPSTREAM_ANTHROPIC:-http://localhost:4000/v1}"
+      export LORE_WORKER_UPSTREAM="${LORE_WORKER_UPSTREAM:-http://localhost:4000/v1}"
+
       lore start --local --port 3207 &
       LORE_PID=$!
       echo "  Lore    -> http://localhost:3207 (PID $LORE_PID)"
