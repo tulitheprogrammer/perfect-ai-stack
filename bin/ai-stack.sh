@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # ai-stack — Docker-based AI proxy stack
+# LiteLLM runs in Docker, Lore runs on host.
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CMD="${1:-help}"
@@ -19,19 +20,19 @@ wizard() {
     local val
     val="$(eval echo \$$name 2>/dev/null || true)"
     if [ -z "$val" ]; then
-      echo "  \xE2\x9C\x97 $name is not set"
+      echo "  $name is not set"
       echo "    -> $desc"
       [ -n "$default" ] && echo "    (default: $default)"
       MISSING="$MISSING $name"
       return 1
     else
-      echo "  \xE2\x9C\x93 $name is set"
+      echo "  $name is set"
       return 0
     fi
   }
 
-  check_var "ANTHROPIC_API_KEY" "Only if using Claude"
-  check_var "OPENAI_API_KEY" "Only if using GPT-4o"
+  check_var "ANTHROPIC_API_KEY" "Only if using Claude (chat model)"
+  check_var "OPENAI_API_KEY" "Only if using DeepSeek/GPT-4o"
   check_var "LITELLM_MASTER_KEY" "LiteLLM admin key" "sk-litellm-master"
   check_var "LORE_CHAT_MODEL" "Model for chat sessions" "claude-3-5-sonnet"
   check_var "LORE_WORKER_MODEL" "Model for background workers" "local-llama"
@@ -95,8 +96,8 @@ wizard() {
     esac
   }
 
-  prompt_var "ANTHROPIC_API_KEY" "Only if using Claude" ""
-  prompt_var "OPENAI_API_KEY" "Only if using GPT-4o" ""
+  prompt_var "ANTHROPIC_API_KEY" "Only if using Claude (chat model)" ""
+  prompt_var "OPENAI_API_KEY" "Only if using DeepSeek/GPT-4o" ""
   prompt_var "LITELLM_MASTER_KEY" "LiteLLM admin key" "sk-litellm-master"
   prompt_var "LORE_CHAT_MODEL" "Model for chat sessions" "claude-3-5-sonnet"
   prompt_var "LORE_WORKER_MODEL" "Model for background workers" "local-llama"
@@ -105,34 +106,75 @@ wizard() {
   echo "  Done!"
 }
 
+check_deps() {
+  command -v docker >/dev/null 2>&1 || { echo "Missing: docker"; exit 1; }
+  command -v lore >/dev/null 2>&1 && return 0
+  echo "Warning: 'lore' CLI not found on PATH"
+  echo "  Install: npm install -g @byk/lore"
+  echo "  Or Lore will not start (LiteLLM will still run)"
+  echo ""
+  printf "  Continue anyway? [Y/n]: "
+  read -r yn
+  yn="${yn:-Y}"
+  if [ "$yn" != "Y" ] && [ "$yn" != "y" ]; then exit 1; fi
+}
+
 case "$CMD" in
   wizard|setup|config)
     wizard
     ;;
   start|up)
-    echo "Starting AI stack..."
-    cd "$DIR" && docker compose up -d
-    echo "  Lore    -> http://localhost:3207"
+    check_deps
+    cd "$DIR"
+
+    echo "Starting LiteLLM (Docker)..."
+    docker compose up -d litellm
     echo "  LiteLLM -> http://localhost:4000"
+
+    if command -v lore >/dev/null 2>&1; then
+      echo "Starting Lore (host)..."
+      lore start --local --port 3207 &
+      LORE_PID=$!
+      echo "  Lore    -> http://localhost:3207 (PID $LORE_PID)"
+      echo $LORE_PID > /tmp/ai-stack-lore.pid
+    fi
+
+    echo ""
+    echo "Stack is running. Stop with: ai-stack stop"
     ;;
   stop|down)
-    echo "Stopping AI stack..."
-    cd "$DIR" && docker compose down
+    cd "$DIR"
+    echo "Stopping LiteLLM (Docker)..."
+    docker compose down
+
+    if [ -f /tmp/ai-stack-lore.pid ]; then
+      LORE_PID=$(cat /tmp/ai-stack-lore.pid)
+      echo "Stopping Lore (PID $LORE_PID)..."
+      kill "$LORE_PID" 2>/dev/null || true
+      rm -f /tmp/ai-stack-lore.pid
+    fi
+
     echo "Done"
     ;;
   restart)
-    cd "$DIR" && docker compose restart
-    echo "Done"
+    "$0" stop
+    sleep 1
+    "$0" start
     ;;
   logs)
-    cd "$DIR" && docker compose logs -f
+    cd "$DIR" && docker compose logs -f litellm
     ;;
   ps|status)
     cd "$DIR" && docker compose ps
+    if [ -f /tmp/ai-stack-lore.pid ]; then
+      echo "Lore: running (PID $(cat /tmp/ai-stack-lore.pid))"
+    else
+      echo "Lore: not running"
+    fi
     ;;
   update)
-    cd "$DIR" && docker compose pull && docker compose up -d
-    echo "Done"
+    cd "$DIR" && docker compose pull
+    echo "Done. Run ai-stack start to use the new images."
     ;;
   setup-lat)
     command -v lat >/dev/null 2>&1 || npm install -g lat.md
@@ -140,20 +182,23 @@ case "$CMD" in
     echo "lat.md ready"
     ;;
   help|*)
-    echo "perfect-ai-stack -- Docker-based AI proxy stack"
+    echo "perfect-ai-stack — AI proxy stack"
     echo ""
     echo "Commands:"
     echo "  wizard     Interactive setup for env vars"
-    echo "  start      Start containers"
-    echo "  stop       Stop containers"
-    echo "  restart    Restart containers"
-    echo "  logs       Follow logs"
-    echo "  ps         Container status"
-    echo "  update     Pull latest images and recreate"
+    echo "  start      Start LiteLLM (Docker) + Lore (host)"
+    echo "  stop       Stop both"
+    echo "  restart    Restart both"
+    echo "  logs       Follow LiteLLM logs"
+    echo "  ps         Show status"
+    echo "  update     Pull latest Docker images"
     echo "  setup-lat  Scaffold lat.md in current project"
     echo ""
+    echo "  sh bin/ai-stack.sh wizard"
+    echo "  sh bin/ai-stack.sh start"
+    echo ""
     echo "Quick start:"
-    echo "  ai-stack wizard"
-    echo "  ai-stack start"
+    echo "  sh bin/ai-stack.sh wizard"
+    echo "  sh bin/ai-stack.sh start"
     ;;
 esac

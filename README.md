@@ -1,21 +1,16 @@
 # perfect-ai-stack
 
-**Docker-based AI proxy stack** — one command to run Lore AI Gateway + LiteLLM.
+**AI proxy stack** — LiteLLM in Docker, Lore on the host.
 
 ```
-Zed → Lore (:3207) → LiteLLM (:4000) → Anthropic / OpenAI / Ollama (host)
+Zed -> Lore (:3207) -> LiteLLM (:4000) -> DeepSeek / Anthropic / OpenAI / Ollama (host)
 ```
 
 ## Prerequisites
 
 - Docker + Docker Compose (v2)
+- `lore` CLI: `npm install -g @byk/lore` (optional — LiteLLM works standalone)
 - API keys in environment (see below)
-
-## Wizard
-
-First run the interactive setup to configure your API keys:
-
-
 
 ## Quick start
 
@@ -23,23 +18,22 @@ First run the interactive setup to configure your API keys:
 git clone git@github.com:tulitheprogrammer/perfect-ai-stack.git
 cd perfect-ai-stack
 
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
+# Interactive setup
+sh bin/ai-stack.sh wizard
 
-bin/ai-stack start
+# Start the stack
+sh bin/ai-stack.sh start
 ```
 
 ## Commands
 
-| Command              | What it does                        |
-|----------------------|-------------------------------------|
-| `ai-stack start`     | Start all containers (detached)     |
-| `ai-stack stop`      | Stop all containers                 |
-| `ai-stack logs`      | Follow combined logs                |
-| `ai-stack ps`        | Show container status               |
-| `ai-stack update`    | Pull latest images and recreate     |
-| `ai-stack wizard`    | Interactive setup for missing env vars        |
-| `ai-stack setup-lat` | Scaffold lat.md in current project  |
+| Command               | What it does                               |
+|-----------------------|--------------------------------------------|
+| `sh bin/ai-stack.sh wizard` | Interactive setup for env vars        |
+| `sh bin/ai-stack.sh start`  | Start LiteLLM (Docker) + Lore (host)  |
+| `sh bin/ai-stack.sh stop`   | Stop both                              |
+| `sh bin/ai-stack.sh logs`   | Follow LiteLLM logs                   |
+| `sh bin/ai-stack.sh ps`     | Show status                            |
 
 ## Environment Variables
 
@@ -49,58 +43,49 @@ All vars have sensible defaults — API keys are only needed if you use cloud mo
 
 | Variable             | Purpose                  | Default             |
 |----------------------|--------------------------|---------------------|
-| `ANTHROPIC_API_KEY`  | Claude 3.5 Sonnet        | only if using Claude     |
-| `OPENAI_API_KEY`     | GPT-4o                   | only if using GPT-4o     |
+| `ANTHROPIC_API_KEY`  | Claude 3.5 Sonnet        | only if using Claude|
+| `OPENAI_API_KEY`     | DeepSeek / GPT-4o        | only if using cloud |
 | `LITELLM_MASTER_KEY` | LiteLLM admin key        | `sk-litellm-master` |
 
-### Lore AI Gateway
+### Lore (host CLI)
 
 | Variable             | Purpose                  | Default               |
 |----------------------|--------------------------|-----------------------|
 | `LORE_LLM_KEY`       | Key Lore uses for LLM    | falls back to `OPENAI_API_KEY` |
 | `LORE_CHAT_MODEL`    | Model for chat sessions  | `claude-3-5-sonnet`   |
-| `LORE_WORKER_MODEL`  | Model for background workers (insights, compression, recall indexing) | `local-llama` |
+| `LORE_WORKER_MODEL`  | Model for background workers | `local-llama`     |
+| `LORE_WORKER_API_KEY`| API key for worker model | falls back to `LORE_LLM_KEY` |
 | `LORE_DEBUG`         | Enable debug logging     | `true`                |
 
-Override any of them inline:
+### Ollama-only (no API keys)
 
 ```sh
-LORE_CHAT_MODEL=gpt-4o LORE_WORKER_MODEL=claude-3-5-sonnet bin/ai-stack start
+LORE_CHAT_MODEL=local-llama \
+LORE_WORKER_MODEL=local-llama \
+sh bin/ai-stack.sh start
 ```
 
 ## Models
 
-| Model name          | Backend         | Used by                          |
-|---------------------|-----------------|----------------------------------|
-| `claude-3-5-sonnet` | Anthropic API   | Chat sessions (Lore)             |
-| `gpt-4o`            | OpenAI API      | Chat sessions (Lore)             |
-| `local-llama`       | Ollama (host)   | Background workers (Lore)        |
-
-Models are configured in [`config/litellm.yaml`](config/litellm.yaml). Add or remove models there.
+| Model name          | Backend         |
+|---------------------|-----------------|
+| `claude-3-5-sonnet` | Anthropic API   |
+| `gpt-4o`            | OpenAI API      |
+| `deepseek-v4-flash` | DeepSeek API    |
+| `deepseek-v4-pro`   | DeepSeek API    |
+| `local-llama`       | Ollama (host)   |
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    ZED["Zed Editor"] --> LORE["Lore AI Gateway\n:3207"]
-    LORE --> LITELLM["LiteLLM\n:4000"]
-    LITELLM --> ANTHROPIC["Anthropic API\nClaude 3.5 Sonnet"]
-    LITELLM --> OPENAI["OpenAI API\nGPT-4o"]
-    LITELLM --> OLLAMA["Ollama (host)\nhost.docker.internal:11434"]
-    ANTHROPIC --> LITELLM
-    OPENAI --> LITELLM
-    OLLAMA --> LITELLM
-    LITELLM --> LORE
-    LORE --> ZED
 ```
-
-## lat.md Scaffold
-
-```sh
-cd your-project
-ai-stack setup-lat
+┌──────────┐     ┌──────────┐     ┌────────────────┐     ┌──────────────┐
+│  Zed     │ ──> │  Lore    │ ──> │  LiteLLM       │ ──> │  DeepSeek    │
+│  Editor  │     │  (:3207) │     │  (Docker:4000)  │     │  Anthropic   │
+│          │     │  (host)  │     │                │ ──> │  OpenAI      │
+└──────────┘     └──────────┘     └────────────────┘     │  Ollama      │
+                                                          └──────────────┘
 ```
 
 ## Legacy
 
-The old shell-based approach (Lore + Headroom + LiteLLM as local CLIs) is archived in [`legacy/`](legacy/).
+The old shell-based approach is archived in [`legacy/`](legacy/).
