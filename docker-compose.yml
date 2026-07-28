@@ -1,0 +1,31 @@
+services:
+  litellm:
+    build:
+      context: .
+      dockerfile: Dockerfile.litellm
+    container_name: ai-litellm
+    ports:
+      - "4000:4000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm-master}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  lore:
+    image: ghcr.io/byk/lore:latest
+    container_name: ai-lore
+    ports:
+      - "3207:3207"
+    volumes:
+      - ./config:/etc/lore
+      - lore_data:/var/lib/lore
+    environment:
+      - LORE_LLM_KEY=${LORE_LLM_KEY:-${OPENAI_API_KEY}}
+    command: ["lore", "start", "--local", "--port", "3207"]
+    restart: unless-stopped
+
+volumes:
+  lore_data:

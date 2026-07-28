@@ -1,0 +1,14 @@
+{
+  "gateway": {
+    "port": 3207
+  },
+  "model": {
+    "providerID": "openai",
+    "modelID": "claude-3-5-sonnet"
+  },
+  "workerModel": {
+    "providerID": "openai",
+    "modelID": "local-llama"
+  },
+  "debug": true
+}
