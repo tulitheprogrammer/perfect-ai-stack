@@ -30,8 +30,8 @@ wizard() {
     fi
   }
 
-  check_var "ANTHROPIC_API_KEY" "Required for Claude 3.5 Sonnet"
-  check_var "OPENAI_API_KEY" "Required for GPT-4o"
+  check_var "ANTHROPIC_API_KEY" "Only if using Claude"
+  check_var "OPENAI_API_KEY" "Only if using GPT-4o"
   check_var "LITELLM_MASTER_KEY" "LiteLLM admin key" "sk-litellm-master"
   check_var "LORE_CHAT_MODEL" "Model for chat sessions" "claude-3-5-sonnet"
   check_var "LORE_WORKER_MODEL" "Model for background workers" "local-llama"
@@ -95,8 +95,8 @@ wizard() {
     esac
   }
 
-  prompt_var "ANTHROPIC_API_KEY" "Required for Claude 3.5 Sonnet" ""
-  prompt_var "OPENAI_API_KEY" "Required for GPT-4o" ""
+  prompt_var "ANTHROPIC_API_KEY" "Only if using Claude" ""
+  prompt_var "OPENAI_API_KEY" "Only if using GPT-4o" ""
   prompt_var "LITELLM_MASTER_KEY" "LiteLLM admin key" "sk-litellm-master"
   prompt_var "LORE_CHAT_MODEL" "Model for chat sessions" "claude-3-5-sonnet"
   prompt_var "LORE_WORKER_MODEL" "Model for background workers" "local-llama"

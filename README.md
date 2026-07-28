@@ -43,14 +43,14 @@ bin/ai-stack start
 
 ## Environment Variables
 
-All vars have sensible defaults — only `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are required.
+All vars have sensible defaults — API keys are only needed if you use cloud models.
 
 ### LiteLLM
 
 | Variable             | Purpose                  | Default             |
 |----------------------|--------------------------|---------------------|
-| `ANTHROPIC_API_KEY`  | Claude 3.5 Sonnet        | **required**        |
-| `OPENAI_API_KEY`     | GPT-4o                   | **required**        |
+| `ANTHROPIC_API_KEY`  | Claude 3.5 Sonnet        | only if using Claude     |
+| `OPENAI_API_KEY`     | GPT-4o                   | only if using GPT-4o     |
 | `LITELLM_MASTER_KEY` | LiteLLM admin key        | `sk-litellm-master` |
 
 ### Lore AI Gateway
