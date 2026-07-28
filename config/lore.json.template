@@ -4,11 +4,11 @@
   },
   "model": {
     "providerID": "openai",
-    "modelID": "claude-3-5-sonnet"
+    "modelID": "{{LORE_CHAT_MODEL}}"
   },
   "workerModel": {
     "providerID": "openai",
-    "modelID": "local-llama"
+    "modelID": "{{LORE_WORKER_MODEL}}"
   },
-  "debug": true
+  "debug": {{LORE_DEBUG}}
 }

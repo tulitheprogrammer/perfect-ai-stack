@@ -21,10 +21,14 @@ services:
       - "3207:3207"
     volumes:
       - ./config:/etc/lore
+      - ./scripts:/scripts
       - lore_data:/var/lib/lore
     environment:
       - LORE_LLM_KEY=${LORE_LLM_KEY:-${OPENAI_API_KEY}}
-    command: ["lore", "start", "--local", "--port", "3207"]
+      - LORE_CHAT_MODEL=${LORE_CHAT_MODEL:-claude-3-5-sonnet}
+      - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-local-llama}
+      - LORE_DEBUG=${LORE_DEBUG:-true}
+    command: ["/bin/sh", "/scripts/entrypoint-lore.sh"]
     restart: unless-stopped
 
 volumes:
