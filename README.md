@@ -8,6 +8,12 @@ Zed -> Lore (:3207) -> LiteLLM (:4000) -> DeepSeek / Anthropic / OpenAI / Ollama
 
 ## Prerequisites
 
+- Docker Desktop (running):
+  ```sh
+  open -a Docker
+  # wait for the whale icon in the menu bar to stop animating
+  ```
+
 - Docker + Docker Compose (v2)
 - `lore` CLI: `npm install -g @byk/lore` (optional — LiteLLM works standalone)
 - API keys in environment (see below)
