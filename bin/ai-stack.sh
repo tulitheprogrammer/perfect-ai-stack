@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ai-stack — Docker-based AI proxy stack
-# LiteLLM runs in Docker, Lore runs on host.
+# LiteLLM (+ Headroom compression) + Lore both run in Docker.
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CMD="${1:-help}"
@@ -33,9 +33,6 @@ wizard() {
 
   check_var "ANTHROPIC_API_KEY" "Only if using Claude (chat model)"
   check_var "OPENAI_API_KEY" "Only if using DeepSeek/GPT-4o"
-  check_var "LITELLM_MASTER_KEY" "LiteLLM admin key" "sk-litellm-master"
-  check_var "LORE_CHAT_MODEL" "Model for chat sessions" "claude-3-5-sonnet"
-  check_var "LORE_WORKER_MODEL" "Model for background workers" "local-llama"
 
   echo ""
   if [ -z "$MISSING" ]; then
@@ -98,9 +95,6 @@ wizard() {
 
   prompt_var "ANTHROPIC_API_KEY" "Only if using Claude (chat model)" ""
   prompt_var "OPENAI_API_KEY" "Only if using DeepSeek/GPT-4o" ""
-  prompt_var "LITELLM_MASTER_KEY" "LiteLLM admin key" "sk-litellm-master"
-  prompt_var "LORE_CHAT_MODEL" "Model for chat sessions" "claude-3-5-sonnet"
-  prompt_var "LORE_WORKER_MODEL" "Model for background workers" "local-llama"
 
   echo ""
   echo "  Done!"
@@ -108,15 +102,15 @@ wizard() {
 
 check_deps() {
   command -v docker >/dev/null 2>&1 || { echo "Missing: docker"; exit 1; }
-  command -v lore >/dev/null 2>&1 && return 0
-  echo "Warning: 'lore' CLI not found on PATH"
-  echo "  Install: npm install -g @byk/lore"
-  echo "  Or Lore will not start (LiteLLM will still run)"
-  echo ""
-  printf "  Continue anyway? [Y/n]: "
-  read -r yn
-  yn="${yn:-Y}"
-  if [ "$yn" != "Y" ] && [ "$yn" != "y" ]; then exit 1; fi
+}
+
+setup_lat() {
+  # lat.md — markdown knowledge graph for the repo (agents read it via lat search/MCP)
+  command -v lat >/dev/null 2>&1 || npm install -g lat.md
+  if [ ! -f "$DIR/lat.md/lat.md" ]; then
+    (cd "$DIR" && lat init)
+  fi
+  echo "  lat.md    -> $DIR/lat.md"
 }
 
 case "$CMD" in
@@ -126,40 +120,20 @@ case "$CMD" in
   start|up)
     check_deps
     cd "$DIR"
+    mkdir -p data/lore data/headroom
 
-    echo "Starting LiteLLM (Docker)..."
-    docker compose up -d litellm
+    echo "Building + starting LiteLLM (with Headroom) and Lore (Docker)..."
+    docker compose up -d --build
+    setup_lat
+    echo ""
     echo "  LiteLLM -> http://localhost:4000"
-
-    if command -v lore >/dev/null 2>&1; then
-      echo "Starting Lore (host)..."
-
-      # Point Lore at LiteLLM unless user explicitly set these
-      export LORE_UPSTREAM_OPENAI="${LORE_UPSTREAM_OPENAI:-http://localhost:4000/v1}"
-      export LORE_UPSTREAM_ANTHROPIC="${LORE_UPSTREAM_ANTHROPIC:-http://localhost:4000/v1}"
-      export LORE_WORKER_UPSTREAM="${LORE_WORKER_UPSTREAM:-http://localhost:4000/v1}"
-
-      lore start --local --port 3207 &
-      LORE_PID=$!
-      echo "  Lore    -> http://localhost:3207 (PID $LORE_PID)"
-      echo $LORE_PID > /tmp/ai-stack-lore.pid
-    fi
-
+    echo "  Lore    -> http://localhost:3207 (dashboard: /ui)"
     echo ""
     echo "Stack is running. Stop with: ai-stack stop"
     ;;
   stop|down)
     cd "$DIR"
-    echo "Stopping LiteLLM (Docker)..."
     docker compose down
-
-    if [ -f /tmp/ai-stack-lore.pid ]; then
-      LORE_PID=$(cat /tmp/ai-stack-lore.pid)
-      echo "Stopping Lore (PID $LORE_PID)..."
-      kill "$LORE_PID" 2>/dev/null || true
-      rm -f /tmp/ai-stack-lore.pid
-    fi
-
     echo "Done"
     ;;
   restart)
@@ -168,37 +142,31 @@ case "$CMD" in
     "$0" start
     ;;
   logs)
-    cd "$DIR" && docker compose logs -f litellm
+    cd "$DIR" && docker compose logs -f ${2:-}
     ;;
   ps|status)
     cd "$DIR" && docker compose ps
-    if [ -f /tmp/ai-stack-lore.pid ]; then
-      echo "Lore: running (PID $(cat /tmp/ai-stack-lore.pid))"
-    else
-      echo "Lore: not running"
-    fi
     ;;
   update)
-    cd "$DIR" && docker compose pull
-    echo "Done. Run ai-stack start to use the new images."
+    cd "$DIR"
+    docker compose build --pull litellm lore
+    echo "Done. Run ai-stack start to use the new versions."
     ;;
   setup-lat)
-    command -v lat >/dev/null 2>&1 || npm install -g lat.md
-    [ -f "$PWD/lat.md/lat.md" ] || (cd "$PWD" && lat init)
-    echo "lat.md ready"
+    setup_lat
     ;;
   help|*)
     echo "perfect-ai-stack — AI proxy stack"
     echo ""
     echo "Commands:"
     echo "  wizard     Interactive setup for env vars"
-    echo "  start      Start LiteLLM (Docker) + Lore (host)"
+    echo "  start      Build + start LiteLLM (with Headroom) + Lore (Docker)"
     echo "  stop       Stop both"
     echo "  restart    Restart both"
-    echo "  logs       Follow LiteLLM logs"
+    echo "  logs       Follow logs (all services; pass a name for one)"
     echo "  ps         Show status"
-    echo "  update     Pull latest Docker images"
-    echo "  setup-lat  Scaffold lat.md in current project"
+    echo "  update     Rebuild LiteLLM (with Headroom) + Lore from latest base images"
+    echo "  setup-lat  Scaffold lat.md knowledge graph in the repo (runs on start too)"
     echo ""
     echo "  sh bin/ai-stack.sh wizard"
     echo "  sh bin/ai-stack.sh start"
