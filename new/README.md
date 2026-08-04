@@ -61,6 +61,9 @@ model (~275 MB) once, cached in `data/headroom/`.
 ## Environment Variables
 
 All vars have sensible defaults — API keys are only needed if you use cloud models.
+Docker Compose interpolates `${VAR}` only inside `docker-compose.yml`, not
+within `.env` values — overrides must be literal values (no `$REF`
+indirection; see `.env.example.md`).
 
 ### Where to put API keys
 
@@ -72,18 +75,18 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 or write them to a repo-local `.env` file (auto-loaded by Docker Compose,
-gitignored). A template with every supported variable (all commented, zero
-secrets) is committed as [`.env.example`](.env.example) — copy it to `.env`
-and uncomment what you need. The wizard (`ai-stack.sh wizard`) can generate
-this for you too:
+gitignored). A template with every supported variable (zero secrets) is
+committed as [`.env.example.md`](.env.example.md) — copy it to `.env` and
+adjust. The wizard (`ai-stack.sh wizard`) can generate this for you too:
 
 ```sh
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Don't set any `LORE_*` variables — the compose defaults point Lore at LiteLLM
-and that's where you want it (see the stale-env warning in Quick start).
+Don't override the `LORE_*` variables unless you need to — the defaults
+(shown in `.env.example.md`) point Lore at LiteLLM, and that's where you
+want it (see the stale-env warning in Quick start).
 
 ### LiteLLM
 
