@@ -1,0 +1,44 @@
+model_list:
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Alias used by the user's client (Zed -> Lore sends "v4-flash")
+  - model_name: v4-flash
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: deepseek-v4-pro
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: local-llama
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://host.docker.internal:11434
+
+  # Lore's background worker model (LORE_WORKER_MODEL default in docker-compose.yml)
+  - model_name: llama3.1:8b
+    litellm_params:
+      model: ollama/llama3.1:8b
+      api_base: http://host.docker.internal:11434
+
+# Headroom compression is registered in litellm/entrypoint.py (see litellm/Dockerfile)
+# — LiteLLM's YAML dotted-path callbacks register the class, not an instance,
+# which breaks the async pre-call hook.
+#
+# No master_key: litellm runs auth-disabled (accepts any key) so lore's
+# forwarded client keys work without a key database.
