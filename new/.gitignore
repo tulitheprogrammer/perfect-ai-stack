@@ -1,6 +1,0 @@
-node_modules/
-.DS_Store
-.env
-lat.md/.cache/
-lat.md/node_modules/
-data/

@@ -1,6 +1,7 @@
 # perfect-ai-stack
 
-**AI proxy stack** — LiteLLM (with Headroom compression) + Lore in Docker.
+**AI proxy stack** — LiteLLM (with Headroom compression) + Lore in Docker,
+plus a per-repo lat.md knowledge graph scaffolded with git-hook enforcement.
 
 ```
 Zed -> Lore (:3207) -> LiteLLM + Headroom (:4000) -> DeepSeek / Anthropic / OpenAI / Ollama (host)
@@ -37,7 +38,7 @@ cd perfect-ai-stack
 # Interactive setup
 sh bin/ai-stack.sh wizard
 
-# Start the stack
+# Start the stack (also scaffolds lat.md + installs the pre-commit hook)
 sh bin/ai-stack.sh start
 ```
 
@@ -47,19 +48,39 @@ model (~275 MB) once, cached in `data/headroom/`.
 
 ## Commands
 
-| Command                        | What it does                                                   |
-| ------------------------------ | -------------------------------------------------------------- |
-| `sh bin/ai-stack.sh wizard`    | Interactive setup for env vars                                 |
-| `sh bin/ai-stack.sh start`     | Build + start LiteLLM + Lore (Docker)                          |
-| `sh bin/ai-stack.sh stop`      | Stop both                                                      |
-| `sh bin/ai-stack.sh logs`      | Follow logs (all services)                                     |
-| `sh bin/ai-stack.sh ps`        | Show status                                                    |
-| `sh bin/ai-stack.sh update`    | Rebuild LiteLLM (with Headroom) + Lore from latest base images |
-| `sh bin/ai-stack.sh setup-lat` | Scaffold the lat.md knowledge graph (runs on `start` too)      |
+| Command                              | What it does                                                          |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| `sh bin/ai-stack.sh wizard`          | Interactive setup for env vars                                        |
+| `sh bin/ai-stack.sh start`           | Build + start LiteLLM + Lore (Docker); scaffold lat.md + hook         |
+| `sh bin/ai-stack.sh stop`            | Stop both                                                             |
+| `sh bin/ai-stack.sh logs`            | Follow logs (all services)                                            |
+| `sh bin/ai-stack.sh ps`              | Show status                                                           |
+| `sh bin/ai-stack.sh update`          | Rebuild LiteLLM (with Headroom) + Lore from latest base images        |
+| `sh bin/ai-stack.sh setup-lat [dir]` | Scaffold lat.md + hook in `[dir]` (default: cwd); runs on `start` too |
+
+## One stack, many projects
+
+The stack is cloned **once** — every project you work in uses the same
+running gateway (Lore keys memory per project via its git remote, not per
+clone), and `lat` is a single global npm install. Per-project setup is just
+the lat.md scaffold + pre-commit hook:
+
+```sh
+cd ~/code/project-a
+sh /path/to/perfect-ai-stack/bin/ai-stack.sh setup-lat
+# or from anywhere: sh .../ai-stack.sh setup-lat ~/code/project-b
+```
+
+Run it once per project — nothing to clone or reinstall. `start`/`stop`/
+`logs`/`update` stay in the stack clone; point each project's IDE at the
+shared gateway (see “IDE / agent setup”).
 
 ## Environment Variables
 
 All vars have sensible defaults — API keys are only needed if you use cloud models.
+Docker Compose interpolates `${VAR}` only inside `docker-compose.yml`, not
+within `.env` values — overrides must be literal values (no `$REF`
+indirection; see `.env.example.md`).
 
 ### Where to put API keys
 
@@ -71,15 +92,18 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 or write them to a repo-local `.env` file (auto-loaded by Docker Compose,
-gitignored). The wizard (`ai-stack.sh wizard`) can generate this for you:
+gitignored). A template with every supported variable (zero secrets) is
+committed as [`.env.example.md`](.env.example.md) — copy it to `.env` and
+adjust. The wizard (`ai-stack.sh wizard`) can generate this for you too:
 
 ```sh
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Don't set any `LORE_*` variables — the compose defaults point Lore at LiteLLM
-and that's where you want it (see the stale-env warning in Quick start).
+Don't override the `LORE_*` variables unless you need to — the defaults
+(shown in `.env.example.md`) point Lore at LiteLLM, and that's where you
+want it (see the stale-env warning in Quick start).
 
 ### LiteLLM
 
@@ -99,12 +123,23 @@ local single-user stack; don't expose port `4000` beyond your machine.
 | `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000/v1`        |
 | `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000/v1`        |
 | `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000/v1`        |
-| `LORE_WORKER_MODEL`       | Background worker model         | `llama3.1:8b`                   |
+| `LORE_WORKER_MODEL`       | Background worker model         | `openai/llama3.1:8b`            |
 | `LORE_WORKER_API_KEY`     | Key used for worker calls       | `sk-litellm-master` (any works) |
 | `LORE_DEBUG`              | Enable debug logging            | `true`                          |
 
-`LORE_WORKER_MODEL` must exist in LiteLLM's `model_list` (`config/litellm.yaml`)
-— change both if your Ollama uses a different tag.
+`LORE_WORKER_MODEL` is a `provider/model` pair. The part after the slash is the
+model name sent to `LORE_WORKER_UPSTREAM` and **must exist in LiteLLM's
+`model_list`** (`config/litellm.yaml`). The part before the slash selects the
+protocol Lore's worker uses:
+
+- `openai/…` — OpenAI-compatible chat completions (LiteLLM, DeepSeek, Ollama).
+- `anthropic/…` — Anthropic Messages API.
+- **No prefix defaults to `anthropic`** — a bare `llama3.1:8b` makes the worker
+  speak Anthropic to LiteLLM, which 404s. Always write the `openai/` prefix when
+  the worker targets LiteLLM.
+
+Change both the prefix and the model name if your Ollama uses a different tag
+(e.g. `openai/qwen2.5:7b` + a matching `model_list` entry).
 
 The upstream defaults point at LiteLLM inside the Docker network — override
 them only if you want Lore to skip LiteLLM.
@@ -127,18 +162,14 @@ Then:
 sh bin/ai-stack.sh start
 ```
 
-No keys needed — `local-llama` and `llama3.1:8b` route through LiteLLM to
-Ollama on the host.
+No keys needed — `llama3.1:8b` routes through LiteLLM to Ollama on the host.
 
 ## Models
 
 | Model name          | Backend       |
 | ------------------- | ------------- |
-| `claude-3-5-sonnet` | Anthropic API |
-| `gpt-4o`            | OpenAI API    |
 | `deepseek-v4-flash` | DeepSeek API  |
 | `deepseek-v4-pro`   | DeepSeek API  |
-| `local-llama`       | Ollama (host) |
 | `llama3.1:8b`       | Ollama (host) |
 
 ## Architecture
@@ -152,11 +183,12 @@ Ollama on the host.
                                                               └──────────────┘
 ```
 
-## Point your agent at the stack
+## IDE / agent setup (BYOK)
 
-Point your client (Zed, Claude Code, any OpenAI-compatible tool) at Lore's
-gateway. Any API key value works — LiteLLM runs auth-disabled, so the key is
-just passed through:
+The stack is client-agnostic: any editor or coding agent that supports
+bring-your-own-key (BYOK) OpenAI-compatible endpoints can use it. Point your
+client at Lore's gateway — any API key value works, since LiteLLM runs
+auth-disabled and the key is just passed through:
 
 ```sh
 export OPENAI_BASE_URL=http://localhost:3207/v1      # OpenAI-compatible clients
@@ -164,23 +196,60 @@ export OPENAI_BASE_URL=http://localhost:3207/v1      # OpenAI-compatible clients
 # export ANTHROPIC_BASE_URL=http://localhost:3207     # Anthropic-protocol clients
 ```
 
-Use a model name from the Models table above (e.g. `v4-flash` for DeepSeek,
-`claude-3-5-sonnet`, or `local-llama` for Ollama). Lore's own gateway also
-prints these instructions on startup (`docker compose logs lore`).
+Use a model name from the Models table above (e.g. `deepseek-v4-flash` for
+DeepSeek, or `llama3.1:8b` for Ollama). Zed, Cursor, VS Code
+Copilot, Claude Code — anything that accepts a custom base URL — works the
+same way. These are guidelines, not repo-committed IDE config: adapt to
+whatever editor your team uses.
+
+### Knowledge graph access (MCP)
+
+If your IDE supports MCP, register lat's server so the agent queries the graph
+with `lat search` / `lat section` instead of grepping. Example — Zed
+(`.zed/mcp.json` in the project):
+
+```json
+{
+  "servers": {
+    "lat": { "command": "lat", "args": ["mcp"] }
+  }
+}
+```
+
+Claude Code, Cursor, and friends get hooks + MCP automatically from
+`lat init`. For other IDEs, adapt the pattern: `lat mcp` speaks stdio MCP.
+
+Lore's own gateway also prints these instructions on startup
+(`docker compose logs lore`).
 
 ## lat.md
 
 [`lat.md`](https://www.npmjs.com/package/lat.md) is a markdown knowledge
 graph for the codebase — high-level concepts, business logic, and architecture
-that your agent reads via `lat search` / `lat expand` (or its MCP server).
-`ai-stack start` scaffolds it (`lat.md/lat.md`) if missing; re-run with
-`sh bin/ai-stack.sh setup-lat`.
+that your agent reads via `lat search` / `lat section` (or its MCP server).
+`ai-stack start` scaffolds it if missing or still just the committed
+placeholder intro file; re-run with `sh bin/ai-stack.sh setup-lat`.
 
 ```sh
 lat search "payment flow"   # semantic search across lat.md sections
-lat gen agents.md            # generate agent instructions that use lat
-lat reindex                  # rebuild the embedding index (lat.md/.cache/, gitignored)
+lat section "architecture"  # show a section with its links and refs
+lat gen agents.md           # generate agent instructions that use lat
+lat check                   # validate links + code references (runs on every commit)
+lat reindex                 # rebuild the embedding index (lat.md/.cache/, gitignored)
 ```
+
+`lat init` (which the setup runs) is interactive — it asks which coding agents
+you use and wires up hooks/MCP/skills for them. It therefore only runs when
+stdin is a terminal; an unattended `start` prints a hint to run
+`ai-stack setup-lat` manually instead. Semantic search works offline out of
+the box (bundled local embedding model) — no key needed.
+
+**Enforcement:** `setup-lat` installs a git pre-commit hook (`.git/hooks/
+pre-commit`) that runs `lat check`. A commit that changes a `// @lat:` anchor
+without updating the graph fails — docs can't drift silently, for human edits
+as well as agent edits. The install is idempotent: an existing hook that
+already runs `lat check` is left alone, and one without it gets `lat check`
+appended.
 
 The knowledge base itself (`lat.md/lat.md`) is meant to be committed; only the
 generated embedding index (`lat.md/.cache/`) is gitignored.
@@ -242,15 +311,20 @@ Lore's gateway hardcodes a model-prefix → provider table (`claude-*` →
 `api.anthropic.com`, `gpt-*`/`deepseek-*` → OpenAI, …) that would bypass
 LiteLLM. The Lore Dockerfile (`Dockerfile`) patches that table out, so **every**
 session request falls through to `LORE_UPSTREAM_*` (LiteLLM) and gets Headroom
-compression — same for the worker, which already used `LORE_WORKER_UPSTREAM`.
-LiteLLM then maps the model name to the real provider via `config/litellm.yaml`.
+compression. LiteLLM then maps the model name to the real provider via
+`config/litellm.yaml`.
+
+The **worker** takes a separate path: `LORE_WORKER_MODEL` splits on `/` into
+`provider/model`, and the provider part selects the protocol. With no `/`, Lore
+assumes `anthropic` — which makes the worker speak Anthropic to LiteLLM and 404.
+The default `openai/llama3.1:8b` forces the OpenAI protocol, so the worker
+sends plain `llama3.1:8b` to LiteLLM (→ Ollama), exactly like the session model
+sends `deepseek-v4-flash` (→ DeepSeek). Session and worker can therefore use
+different real providers (DeepSeek + Ollama) as long as both use the OpenAI
+protocol through LiteLLM.
 
 Check it works:
 
 ```sh
 docker compose logs litellm | grep Headroom   # per-request "Headroom: N->M tokens" lines
 ```
-
-## Legacy
-
-The old shell-based approach is archived in [`legacy/`](legacy/).
