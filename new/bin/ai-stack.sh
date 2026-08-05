@@ -40,6 +40,7 @@ wizard() {
   echo ""
   if [ -z "$MISSING" ]; then
     echo "  All set. Run: ai-stack start"
+    echo "  (No .env written — keys are already in your environment; copy .env.example.md to .env if you want one.)"
     exit 0
   fi
 
@@ -66,7 +67,16 @@ wizard() {
     local name="$1" desc="$2" default="${3:-}"
     local val
     val="$(eval echo \$$name 2>/dev/null || true)"
-    [ -n "$val" ] && return 0
+    if [ -n "$val" ]; then
+      echo "  $name is set (environment)"
+      case "$CHOICE" in
+        2|3)
+          echo "$name=\"$val\"" >> "$ENV_FILE"
+          echo "  Saved to .env"
+          ;;
+      esac
+      return 0
+    fi
 
     if [ -n "$default" ]; then
       printf "  %s (%s) [%s]: " "$name" "$desc" "$default"
@@ -77,6 +87,11 @@ wizard() {
     INPUT="${INPUT:-$default}"
     if [ -z "$INPUT" ] && [ -z "$default" ]; then
       echo "    Skipped"
+      case "$CHOICE" in
+        2|3)
+          echo "# $name=" >> "$ENV_FILE"
+          ;;
+      esac
       return 0
     fi
 
@@ -100,7 +115,11 @@ wizard() {
   prompt_var "OPENAI_API_KEY" "Only if using DeepSeek/GPT-4o" ""
 
   echo ""
-  echo "  Done!"
+  if [ "$CHOICE" != "1" ]; then
+    echo "  Done! .env written to $DIR/.env"
+  else
+    echo "  Done!"
+  fi
 }
 
 check_deps() {
