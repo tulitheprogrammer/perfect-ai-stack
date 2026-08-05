@@ -107,39 +107,25 @@ want it (see the stale-env warning in Quick start).
 
 ### LiteLLM
 
-| Variable             | Purpose                  | Default              |
-| -------------------- | ------------------------ | -------------------- |
-| `ANTHROPIC_API_KEY`  | Claude 3.5 Sonnet        | only if using Claude |
-| `OPENAI_API_KEY`     | DeepSeek / GPT-4o        | only if using cloud  |
-| `LITELLM_MASTER_KEY` | Enables dashboard + auth | `sk-litellm-master`  |
+| Variable            | Purpose           | Default              |
+| ------------------- | ----------------- | -------------------- |
+| `ANTHROPIC_API_KEY` | Claude 3.5 Sonnet | only if using Claude |
+| `OPENAI_API_KEY`    | DeepSeek / GPT-4o | only if using cloud  |
 
-#### LiteLLM auth & dashboard
-
-The stack runs LiteLLM **auth-enabled**: `LITELLM_MASTER_KEY` (default
-`sk-litellm-master`) both enables the Admin dashboard at
-`http://localhost:4000/ui` and requires every API caller to present a valid
-key. There is no key database — the whole single-user stack uses this one
-key.
-
-- **Log in**: username `admin`, password = the master key (`sk-litellm-master`
-  by default). Configure via `LITELLM_UI_USERNAME` / `LITELLM_UI_PASSWORD`.
-- **Worker**: the background worker already inherits the master key via
-  `LORE_WORKER_API_KEY=${LITELLM_MASTER_KEY}` — it authenticates with the
-  same key, so it works with auth on.
-- **Clients**: your agent's key (whatever it sends through Lore) must equal
-  the master key, since auth is on. It's a local single-user stack — change
-  the key if you'll ever expose port `4000`.
+No `LITELLM_MASTER_KEY` is set: LiteLLM runs **auth-disabled** (accepts any
+key) so Lore's forwarded client keys work without a key database. This is a
+local single-user stack; don't expose port `4000` beyond your machine.
 
 ### Lore (Docker)
 
-| Variable                  | Purpose                         | Default                       |
-| ------------------------- | ------------------------------- | ----------------------------- |
-| `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000/v1`      |
-| `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000/v1`      |
-| `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000/v1`      |
-| `LORE_WORKER_MODEL`       | Background worker model         | `llama3.1:8b`                 |
-| `LORE_WORKER_API_KEY`     | Key used for worker calls       | inherits `LITELLM_MASTER_KEY` |
-| `LORE_DEBUG`              | Enable debug logging            | `true`                        |
+| Variable                  | Purpose                         | Default                         |
+| ------------------------- | ------------------------------- | ------------------------------- |
+| `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000/v1`        |
+| `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000/v1`        |
+| `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000/v1`        |
+| `LORE_WORKER_MODEL`       | Background worker model         | `llama3.1:8b`                   |
+| `LORE_WORKER_API_KEY`     | Key used for worker calls       | `sk-litellm-master` (any works) |
+| `LORE_DEBUG`              | Enable debug logging            | `true`                          |
 
 `LORE_WORKER_MODEL` must exist in LiteLLM's `model_list` (`config/litellm.yaml`)
 — change both if your Ollama uses a different tag.
@@ -194,9 +180,8 @@ Ollama on the host.
 
 The stack is client-agnostic: any editor or coding agent that supports
 bring-your-own-key (BYOK) OpenAI-compatible endpoints can use it. Point your
-client at Lore's gateway. With auth on, the key you configure in the client
-must equal `LITELLM_MASTER_KEY` (default `sk-litellm-master`) — it is
-forwarded through Lore to LiteLLM:
+client at Lore's gateway — any API key value works, since LiteLLM runs
+auth-disabled and the key is just passed through:
 
 ```sh
 export OPENAI_BASE_URL=http://localhost:3207/v1      # OpenAI-compatible clients
