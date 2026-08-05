@@ -9,6 +9,23 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CMD="${1:-help}"
 
 wizard() {
+  # `read` fails on non-TTY stdin (EOF), and under `set -e` that kills the
+  # wizard silently mid-flow — after the header write, before any keys are
+  # saved. Fail loudly instead.
+  if [ ! -t 0 ]; then
+    echo "  The wizard is interactive — run it in a terminal."
+    exit 1
+  fi
+  # The wizard configures the SHARED stack; .env belongs next to docker
+  # compose (in the stack dir), not in whichever directory you ran from.
+  if [ "$PWD" != "$DIR" ]; then
+    echo "  Note: this wizard configures the shared stack at:"
+    echo "    $DIR"
+    echo "  .env will be written there (docker compose reads it from the stack),"
+    echo "  not in the current directory. For per-project scaffolding (lat.md"
+    echo "  + hooks), use: ai-stack setup-lat"
+    echo ""
+  fi
   echo "┌─────────────────────────────────────────────┐"
   echo "│  perfect-ai-stack — Setup Wizard             │"
   echo "└─────────────────────────────────────────────┘"
