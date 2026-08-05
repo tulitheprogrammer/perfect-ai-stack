@@ -48,15 +48,32 @@ model (~275 MB) once, cached in `data/headroom/`.
 
 ## Commands
 
-| Command                        | What it does                                                    |
-| ------------------------------ | --------------------------------------------------------------- |
-| `sh bin/ai-stack.sh wizard`    | Interactive setup for env vars                                  |
-| `sh bin/ai-stack.sh start`     | Build + start LiteLLM + Lore (Docker); scaffold lat.md + hook   |
-| `sh bin/ai-stack.sh stop`      | Stop both                                                       |
-| `sh bin/ai-stack.sh logs`      | Follow logs (all services)                                      |
-| `sh bin/ai-stack.sh ps`        | Show status                                                     |
-| `sh bin/ai-stack.sh update`    | Rebuild LiteLLM (with Headroom) + Lore from latest base images  |
-| `sh bin/ai-stack.sh setup-lat` | Scaffold lat.md + install pre-commit hook (runs on `start` too) |
+| Command                              | What it does                                                          |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| `sh bin/ai-stack.sh wizard`          | Interactive setup for env vars                                        |
+| `sh bin/ai-stack.sh start`           | Build + start LiteLLM + Lore (Docker); scaffold lat.md + hook         |
+| `sh bin/ai-stack.sh stop`            | Stop both                                                             |
+| `sh bin/ai-stack.sh logs`            | Follow logs (all services)                                            |
+| `sh bin/ai-stack.sh ps`              | Show status                                                           |
+| `sh bin/ai-stack.sh update`          | Rebuild LiteLLM (with Headroom) + Lore from latest base images        |
+| `sh bin/ai-stack.sh setup-lat [dir]` | Scaffold lat.md + hook in `[dir]` (default: cwd); runs on `start` too |
+
+## One stack, many projects
+
+The stack is cloned **once** — every project you work in uses the same
+running gateway (Lore keys memory per project via its git remote, not per
+clone), and `lat` is a single global npm install. Per-project setup is just
+the lat.md scaffold + pre-commit hook:
+
+```sh
+cd ~/code/project-a
+sh /path/to/perfect-ai-stack/bin/ai-stack.sh setup-lat
+# or from anywhere: sh .../ai-stack.sh setup-lat ~/code/project-b
+```
+
+Run it once per project — nothing to clone or reinstall. `start`/`stop`/
+`logs`/`update` stay in the stack clone; point each project's IDE at the
+shared gateway (see “IDE / agent setup”).
 
 ## Environment Variables
 

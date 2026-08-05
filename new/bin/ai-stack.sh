@@ -107,11 +107,17 @@ check_deps() {
   command -v docker >/dev/null 2>&1 || { echo "Missing: docker"; exit 1; }
 }
 
-# Install the git pre-commit hook that runs `lat check` on every commit.
-# Idempotent: creates .git/hooks/pre-commit if missing, appends `lat check`
-# to an existing hook that lacks it, skips if already present.
+# Install the git pre-commit hook that runs `lat check` on every commit in
+# the given project. Idempotent: creates .git/hooks/pre-commit if missing,
+# appends `lat check` to an existing hook that lacks it, skips if already
+# present. Skipped (with a notice) when the target is not a git repository.
 install_lat_hook() {
-  local hook="$DIR/.git/hooks/pre-commit"
+  local target="$1"
+  if [ ! -d "$target/.git" ]; then
+    echo "  (not a git repository — skipping pre-commit hook)"
+    return 0
+  fi
+  local hook="$target/.git/hooks/pre-commit"
   if [ ! -f "$hook" ]; then
     mkdir -p "$(dirname "$hook")"
     cp "$DIR/scripts/pre-commit-hook.sh" "$hook"
@@ -126,32 +132,37 @@ install_lat_hook() {
   fi
 }
 
-# lat.md — markdown knowledge graph for the repo. Scaffolds lat.md/ and
-# installs the pre-commit hook. `lat init` is interactive (it asks which
-# coding agents you use), so it only runs when stdin is a TTY; an unattended
-# run prints a hint instead. Pass "strict" to fail the command when
-# `lat check` fails (used by the explicit setup-lat command).
+# Scaffold lat.md + the pre-commit hook into a TARGET project. One clone of
+# this package serves every repo:
+#   cd some/project && sh /path/to/perfect-ai-stack/bin/ai-stack.sh setup-lat
+# `lat init` is interactive (it asks which coding agents you use), so it only
+# runs when stdin is a TTY; an unattended run prints a hint instead. Pass
+# "strict" as $2 to fail the command when `lat check` fails (used by the
+# explicit setup-lat command).
 setup_lat() {
-  # 1. Install lat if missing
+  local target="${1:-$PWD}"
+  local strict="${2:-}"
+
+  # 1. Install lat if missing (single global copy, shared by all projects)
   command -v lat >/dev/null 2>&1 || npm install -g lat.md
 
   # 2. Scaffold lat.md/ — `lat init` is interactive (it asks which coding
   #    agents you use), so it only runs when stdin is a TTY; an unattended
   #    run prints a hint instead. Runs when lat.md/ is missing or still
   #    contains only the committed placeholder intro file.
-  if [ ! -d "$DIR/lat.md" ] || [ "$(find "$DIR/lat.md" -type f 2>/dev/null | wc -l | tr -d ' ')" = "1" ]; then
+  if [ ! -d "$target/lat.md" ] || [ "$(find "$target/lat.md" -type f 2>/dev/null | wc -l | tr -d ' ')" = "1" ]; then
     if [ -t 0 ]; then
-      (cd "$DIR" && lat init)
+      lat init "$target"
     else
-      echo "  lat.md not initialized — run 'ai-stack setup-lat' interactively to scaffold it"
+      echo "  lat.md not initialized in $target — run 'ai-stack setup-lat' interactively"
     fi
   fi
 
   # 3. Git pre-commit hook — `lat check` blocks commits with doc drift
-  install_lat_hook
+  install_lat_hook "$target"
 
   # 4. .gitignore hygiene
-  local gitignore="$DIR/.gitignore"
+  local gitignore="$target/.gitignore"
   if [ -f "$gitignore" ]; then
     for entry in "lat.md/.cache/" "lat.md/node_modules/"; do
       if ! grep -qF "$entry" "$gitignore"; then
@@ -159,15 +170,18 @@ setup_lat() {
         echo "  .gitignore: added $entry"
       fi
     done
+  else
+    printf 'lat.md/.cache/\nlat.md/node_modules/\n' > "$gitignore"
+    echo "  .gitignore: created with lat entries"
   fi
 
   # 5. Verify — soft during start (docs are a quality gate, not a runtime
   #    gate), strict on explicit `ai-stack setup-lat`.
-  if lat check >/dev/null 2>&1; then
+  if (cd "$target" && lat check >/dev/null 2>&1); then
     echo "  lat check: OK"
   else
     echo "  lat check: FAILED — fix the graph, then re-run"
-    if [ "${1:-}" = "strict" ]; then
+    if [ "$strict" = "strict" ]; then
       return 1
     fi
   fi
@@ -184,7 +198,7 @@ case "$CMD" in
 
     echo "Building + starting LiteLLM (with Headroom) and Lore (Docker)..."
     docker compose up -d --build
-    setup_lat
+    setup_lat "$DIR"
     echo ""
     echo "  LiteLLM -> http://localhost:4000"
     echo "  Lore    -> http://localhost:3207 (dashboard: /ui)"
@@ -213,7 +227,7 @@ case "$CMD" in
     echo "Done. Run ai-stack start to use the new versions."
     ;;
   setup-lat)
-    setup_lat strict
+    setup_lat "${2:-$PWD}" strict
     ;;
   help|*)
     echo "perfect-ai-stack — AI proxy stack"
@@ -226,10 +240,11 @@ case "$CMD" in
     echo "  logs       Follow logs (all services; pass a name for one)"
     echo "  ps         Show status"
     echo "  update     Rebuild LiteLLM (with Headroom) + Lore from latest base images"
-    echo "  setup-lat  Scaffold lat.md + install pre-commit hook (runs on start too)"
+    echo "  setup-lat  Scaffold lat.md + hook in [dir] (default: cwd; runs on start too)"
     echo ""
     echo "  sh bin/ai-stack.sh wizard"
     echo "  sh bin/ai-stack.sh start"
+    echo "  cd some/project && sh /path/to/ai-stack/bin/ai-stack.sh setup-lat"
     echo ""
     echo "Quick start:"
     echo "  sh bin/ai-stack.sh wizard"
