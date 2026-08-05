@@ -40,5 +40,6 @@ model_list:
 # — LiteLLM's YAML dotted-path callbacks register the class, not an instance,
 # which breaks the async pre-call hook.
 #
-# No master_key: litellm runs auth-disabled (accepts any key) so lore's
-# forwarded client keys work without a key database.
+# Auth: LITELLM_MASTER_KEY is set via docker-compose (default sk-litellm-master).
+# The dashboard (/ui) signs in with LITELLM_UI_USERNAME/LITELLM_UI_PASSWORD;
+# all API callers (Lore worker + clients) present the same master key.

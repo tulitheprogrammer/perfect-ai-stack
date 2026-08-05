@@ -12,9 +12,15 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # No LITELLM_MASTER_KEY on purpose: with it unset, litellm accepts any
-      # key (local single-user stack — lore forwards the client's key, which
-      # would otherwise be rejected as there is no key database).
+      # Master key enables the LiteLLM dashboard (/ui) AND auth: with it set,
+      # every caller (client requests via Lore, the background worker) must
+      # present a valid key. The whole stack uses this one key (no key
+      # database) — see README "LiteLLM auth & dashboard".
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm-master}
+      # Dashboard login: master key with this username/password (not the raw
+      # key in the browser). Change before exposing port 4000 anywhere.
+      - LITELLM_UI_USERNAME=${LITELLM_UI_USERNAME:-admin}
+      - LITELLM_UI_PASSWORD=${LITELLM_UI_PASSWORD:-sk-litellm-master}
       - HF_HOME=/data/headroom/hf
       # Headroom's CCR originals store — relocated onto the host mount
       - HEADROOM_CCR_SQLITE_PATH=/data/headroom/ccr_store.db
@@ -41,7 +47,8 @@ services:
       - LORE_WORKER_UPSTREAM=${LORE_WORKER_UPSTREAM:-http://litellm:4000/v1}
       # Worker model must exist in LiteLLM's model_list (config/litellm.yaml)
       - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-llama3.1:8b}
-      # Worker -> LiteLLM calls use a dedicated key (any key works: auth is off)
+      # Worker -> LiteLLM calls use the master key (inherited above), so it
+      # passes LiteLLM's auth now that LITELLM_MASTER_KEY is set.
       - LORE_WORKER_API_KEY=${LITELLM_MASTER_KEY:-sk-litellm-master}
       - LORE_DEBUG=${LORE_DEBUG:-true}
     depends_on:
