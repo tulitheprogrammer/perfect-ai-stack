@@ -233,7 +233,11 @@ case "$CMD" in
   start|up)
     check_deps
     cd "$DIR"
-    mkdir -p data/lore data/headroom
+    # Data dir: override with AI_STACK_DATA_DIR (e.g. when run via npx from a
+    # cache dir); defaults to ./data next to the stack. Project-specific files
+    # (.env, lat.md/, hooks) always go to the project root, not here.
+    DATA_DIR="${AI_STACK_DATA_DIR:-$DIR/data}"
+    mkdir -p "$DATA_DIR/lore" "$DATA_DIR/headroom"
 
     echo "Building + starting LiteLLM (with Headroom) and Lore (Docker)..."
     docker compose up -d --build

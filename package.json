@@ -1,0 +1,36 @@
+{
+  "name": "perfect-ai-stack",
+  "version": "1.0.0",
+  "description": "Local-first AI proxy stack: LiteLLM + Headroom compression + Lore memory + lat.md knowledge graph",
+  "keywords": [
+    "litellm",
+    "lore",
+    "lat.md",
+    "headroom",
+    "ai",
+    "llm",
+    "proxy",
+    "docker",
+    "local-first"
+  ],
+  "license": "MIT",
+  "bin": {
+    "perfect-ai-stack": "./bin/ai-stack.sh"
+  },
+  "files": [
+    "bin/",
+    "config/",
+    "litellm/",
+    "scripts/",
+    "Dockerfile",
+    "docker-compose.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tulitheprogrammer/perfect-ai-stack.git"
+  }
+}

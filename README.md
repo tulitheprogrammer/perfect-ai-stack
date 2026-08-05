@@ -1,11 +1,35 @@
 # perfect-ai-stack
 
 **AI proxy stack** — LiteLLM (with Headroom compression) + Lore in Docker,
-plus a per-repo lat.md knowledge graph scaffolded with git-hook enforcement.
+plus per-repo lat.md knowledge graph scaffolded git-hook enforcement.
 
 ```
 Zed -> Lore (:3207) -> LiteLLM + Headroom (:4000) -> DeepSeek / Anthropic / OpenAI / Ollama (host)
 ```
+
+## Install
+
+The stack is published on npm and runs anywhere without cloning:
+
+```sh
+# Run the wizard from any project (writes .env in that project)
+npx perfect-ai-stack wizard
+
+# Start the stack (builds Docker images, scaffolds lat.md, installs hooks)
+npx perfect-ai-stack start
+```
+
+`npx` installs the package into npm's cache and runs `bin/ai-stack.sh` from
+there. Project-specific files (`.env`, `lat.md/`, git hooks) are always
+created in the project you run it in; the stack's Docker data (Lore memory,
+Headroom cache) defaults to `./data` next to the stack, or set
+`AI_STACK_DATA_DIR` to relocate it (recommended under npx):
+
+```sh
+export AI_STACK_DATA_DIR=~/.ai-stack
+```
+
+If you prefer to clone instead, see [Quick start](#quick-start).
 
 ## Prerequisites
 
@@ -50,6 +74,7 @@ model (~275 MB) once, cached in `data/headroom/`.
 
 | Command                              | What it does                                                          |
 | ------------------------------------ | --------------------------------------------------------------------- |
+| `npx perfect-ai-stack <cmd>`         | Same as `sh bin/ai-stack.sh <cmd>` — run from any project             |
 | `sh bin/ai-stack.sh wizard`          | Interactive setup for env vars                                        |
 | `sh bin/ai-stack.sh start`           | Build + start LiteLLM + Lore (Docker); scaffold lat.md + hook         |
 | `sh bin/ai-stack.sh stop`            | Stop both                                                             |
