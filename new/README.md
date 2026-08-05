@@ -123,12 +123,23 @@ local single-user stack; don't expose port `4000` beyond your machine.
 | `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000/v1`        |
 | `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000/v1`        |
 | `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000/v1`        |
-| `LORE_WORKER_MODEL`       | Background worker model         | `llama3.1:8b`                   |
+| `LORE_WORKER_MODEL`       | Background worker model         | `openai/llama3.1:8b`            |
 | `LORE_WORKER_API_KEY`     | Key used for worker calls       | `sk-litellm-master` (any works) |
 | `LORE_DEBUG`              | Enable debug logging            | `true`                          |
 
-`LORE_WORKER_MODEL` must exist in LiteLLM's `model_list` (`config/litellm.yaml`)
-— change both if your Ollama uses a different tag.
+`LORE_WORKER_MODEL` is a `provider/model` pair. The part after the slash is the
+model name sent to `LORE_WORKER_UPSTREAM` and **must exist in LiteLLM's
+`model_list`** (`config/litellm.yaml`). The part before the slash selects the
+protocol Lore's worker uses:
+
+- `openai/…` — OpenAI-compatible chat completions (LiteLLM, DeepSeek, Ollama).
+- `anthropic/…` — Anthropic Messages API.
+- **No prefix defaults to `anthropic`** — a bare `llama3.1:8b` makes the worker
+  speak Anthropic to LiteLLM, which 404s. Always write the `openai/` prefix when
+  the worker targets LiteLLM.
+
+Change both the prefix and the model name if your Ollama uses a different tag
+(e.g. `openai/qwen2.5:7b` + a matching `model_list` entry).
 
 The upstream defaults point at LiteLLM inside the Docker network — override
 them only if you want Lore to skip LiteLLM.
@@ -151,18 +162,14 @@ Then:
 sh bin/ai-stack.sh start
 ```
 
-No keys needed — `local-llama` and `llama3.1:8b` route through LiteLLM to
-Ollama on the host.
+No keys needed — `llama3.1:8b` routes through LiteLLM to Ollama on the host.
 
 ## Models
 
 | Model name          | Backend       |
 | ------------------- | ------------- |
-| `claude-3-5-sonnet` | Anthropic API |
-| `gpt-4o`            | OpenAI API    |
 | `deepseek-v4-flash` | DeepSeek API  |
 | `deepseek-v4-pro`   | DeepSeek API  |
-| `local-llama`       | Ollama (host) |
 | `llama3.1:8b`       | Ollama (host) |
 
 ## Architecture
@@ -189,8 +196,8 @@ export OPENAI_BASE_URL=http://localhost:3207/v1      # OpenAI-compatible clients
 # export ANTHROPIC_BASE_URL=http://localhost:3207     # Anthropic-protocol clients
 ```
 
-Use a model name from the Models table above (e.g. `v4-flash` for DeepSeek,
-`claude-3-5-sonnet`, or `local-llama` for Ollama). Zed, Cursor, VS Code
+Use a model name from the Models table above (e.g. `deepseek-v4-flash` for
+DeepSeek, or `llama3.1:8b` for Ollama). Zed, Cursor, VS Code
 Copilot, Claude Code — anything that accepts a custom base URL — works the
 same way. These are guidelines, not repo-committed IDE config: adapt to
 whatever editor your team uses.
@@ -304,8 +311,17 @@ Lore's gateway hardcodes a model-prefix → provider table (`claude-*` →
 `api.anthropic.com`, `gpt-*`/`deepseek-*` → OpenAI, …) that would bypass
 LiteLLM. The Lore Dockerfile (`Dockerfile`) patches that table out, so **every**
 session request falls through to `LORE_UPSTREAM_*` (LiteLLM) and gets Headroom
-compression — same for the worker, which already used `LORE_WORKER_UPSTREAM`.
-LiteLLM then maps the model name to the real provider via `config/litellm.yaml`.
+compression. LiteLLM then maps the model name to the real provider via
+`config/litellm.yaml`.
+
+The **worker** takes a separate path: `LORE_WORKER_MODEL` splits on `/` into
+`provider/model`, and the provider part selects the protocol. With no `/`, Lore
+assumes `anthropic` — which makes the worker speak Anthropic to LiteLLM and 404.
+The default `openai/llama3.1:8b` forces the OpenAI protocol, so the worker
+sends plain `llama3.1:8b` to LiteLLM (→ Ollama), exactly like the session model
+sends `deepseek-v4-flash` (→ DeepSeek). Session and worker can therefore use
+different real providers (DeepSeek + Ollama) as long as both use the OpenAI
+protocol through LiteLLM.
 
 Check it works:
 

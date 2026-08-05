@@ -39,8 +39,10 @@ services:
       - LORE_UPSTREAM_OPENAI=${LORE_UPSTREAM_OPENAI:-http://litellm:4000/v1}
       - LORE_UPSTREAM_ANTHROPIC=${LORE_UPSTREAM_ANTHROPIC:-http://litellm:4000/v1}
       - LORE_WORKER_UPSTREAM=${LORE_WORKER_UPSTREAM:-http://litellm:4000/v1}
-      # Worker model must exist in LiteLLM's model_list (config/litellm.yaml)
-      - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-llama3.1:8b}
+      # Worker model must exist in LiteLLM's model_list (config/litellm.yaml);
+      # the openai/ prefix forces the worker to use the OpenAI protocol so it
+      # reaches LiteLLM instead of the Anthropic protocol (which 404s).
+      - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-openai/llama3.1:8b}
       # Worker -> LiteLLM calls use a dedicated key (any key works: auth is off)
       - LORE_WORKER_API_KEY=${LITELLM_MASTER_KEY:-sk-litellm-master}
       - LORE_DEBUG=${LORE_DEBUG:-true}
