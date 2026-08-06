@@ -33,8 +33,10 @@ services:
     volumes:
       # Lore's memory (SQLite DB + embeddings) — host-side, survives teardown
       - ${AI_STACK_DATA_DIR:-./data}/lore:/root/.local/share/lore
-      # cwd = repo root so .lore.md exports land in the repo, like the old host setup
-      - .:/app
+      # cwd (and .lore.md export target) = the project you ran start from, so
+      # exports land in that repo (set AI_STACK_PROJECT_DIR under npx; defaults
+      # to the stack dir so clones behave like before)
+      - ${AI_STACK_PROJECT_DIR:-.}:/app
     environment:
       - LORE_UPSTREAM_OPENAI=${LORE_UPSTREAM_OPENAI:-http://litellm:4000/v1}
       - LORE_UPSTREAM_ANTHROPIC=${LORE_UPSTREAM_ANTHROPIC:-http://litellm:4000/v1}

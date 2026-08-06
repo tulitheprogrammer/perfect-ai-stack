@@ -232,6 +232,12 @@ case "$CMD" in
     ;;
   start|up)
     check_deps
+    # Project dir: where .lore.md exports and default session attribution land.
+    # Capture $PWD before cd-ing to the stack dir (defaults to the whole stack
+    # dir when run from a clone, like old behavior). Exported so docker compose
+    # interpolates it into the :/app mount.
+    export AI_STACK_PROJECT_DIR="${AI_STACK_PROJECT_DIR:-$PWD}"
+    PROJECT_DIR="$AI_STACK_PROJECT_DIR"
     cd "$DIR"
     # Data dir: override with AI_STACK_DATA_DIR (e.g. when run via npx from a
     # cache dir); defaults to ./data next to the stack. Project-specific files
@@ -241,7 +247,7 @@ case "$CMD" in
 
     echo "Building + starting LiteLLM (with Headroom) and Lore (Docker)..."
     docker compose up -d --build
-    setup_lat "$DIR"
+    setup_lat "$PROJECT_DIR"
     echo ""
     echo "  LiteLLM -> http://localhost:4000"
     echo "  Lore    -> http://localhost:3207 (dashboard: /ui)"

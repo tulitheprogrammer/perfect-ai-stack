@@ -21,12 +21,14 @@ npx perfect-ai-stack start
 
 `npx` installs the package into npm's cache and runs `bin/ai-stack.sh` from
 there. Project-specific files (`.env`, `lat.md/`, git hooks) are always
-created in the project you run it in; the stack's Docker data (Lore memory,
-Headroom cache) defaults to `./data` next to the stack, or set
-`AI_STACK_DATA_DIR` to relocate it (recommended under npx):
+created in the project you run it in. The Lore memory DB and Headroom model
+cache default to `./data` next to the stack, and `.lore.md` exports target
+the current directory — set both when running under npx so they land
+somewhere stable and in your project:
 
 ```sh
-export AI_STACK_DATA_DIR=~/.ai-stack
+export AI_STACK_DATA_DIR=~/.ai-stack      # Lore DB + Headroom cache (shared across projects)
+export AI_STACK_PROJECT_DIR="$PWD"         # where .lore.md exports land (your repo)
 ```
 
 If you prefer to clone instead, see [Quick start](#quick-start).
