@@ -5,7 +5,19 @@ set -euo pipefail
 # LiteLLM (+ Headroom compression) + Lore run in Docker; lat.md knowledge
 # graph scaffolded per-repo with a git pre-commit hook for doc enforcement.
 
-DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve $0 through symlinks: npx/npm invoke the bin via a symlink in
+# node_modules/.bin, so dirname"$0" would be that .bin dir and ".." would
+# land in node_modules (no docker-compose.yml there). Follow the chain to the
+# real script inside the package, then the stack root is one level up.
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+  TARGET="$(readlink "$SCRIPT")"
+  case "$TARGET" in
+    /*) SCRIPT="$TARGET" ;;
+    *)  SCRIPT="$(cd "$(dirname "$SCRIPT")" && pwd)/$TARGET" ;;
+  esac
+done
+DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 CMD="${1:-help}"
 
 wizard() {
