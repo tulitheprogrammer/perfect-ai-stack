@@ -147,25 +147,34 @@ local single-user stack; don't expose port `4000` beyond your machine.
 
 | Variable                  | Purpose                         | Default                         |
 | ------------------------- | ------------------------------- | ------------------------------- |
-| `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000/v1`        |
-| `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000/v1`        |
-| `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000/v1`        |
+| `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000`           |
+| `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000`           |
+| `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000`           |
 | `LORE_WORKER_MODEL`       | Background worker model         | `openai/llama3.1:8b`            |
 | `LORE_WORKER_API_KEY`     | Key used for worker calls       | `sk-litellm-master` (any works) |
 | `LORE_DEBUG`              | Enable debug logging            | `true`                          |
 
 `LORE_WORKER_MODEL` is a `provider/model` pair. The part after the slash is the
 model name sent to `LORE_WORKER_UPSTREAM` and **must exist in LiteLLM's
-`model_list`** (`config/litellm.yaml`). The part before the slash selects the
-protocol Lore's worker uses:
+`model_list`** (`config/litellm.yaml`). The part before the slash is the
+**provider ID**, which selects the protocol the worker speaks:
 
 - `openai/…` — OpenAI-compatible chat completions (LiteLLM, DeepSeek, Ollama).
 - `anthropic/…` — Anthropic Messages API.
-- **No prefix defaults to `anthropic`** — a bare `llama3.1:8b` makes the worker
-  speak Anthropic to LiteLLM, which 404s. Always write the `openai/` prefix when
-  the worker targets LiteLLM.
 
-Change both the prefix and the model name if your Ollama uses a different tag
+Lore resolves `providerID` and derives the protocol from it — it does not parse
+a prefix string, and there is no implicit `anthropic` fallback for a bare model
+name. Always write the `openai` provider when the worker targets LiteLLM, or the
+worker speaks a protocol LiteLLM's `/v1/chat/completions` route won't answer.
+
+**Workers must use the same provider as the session** — cross-provider worker
+calls fail (wrong credentials, wrong API format). They _may_ use a different
+model and a different real backend: `deepseek-v4-flash` (DeepSeek) for the
+session and `llama3.1:8b` (Ollama) for the worker is fine, because both are
+`openai` provider and both route through LiteLLM. Override the URL the worker
+calls with `LORE_WORKER_UPSTREAM`.
+
+Change both the provider and the model name if your Ollama uses a different tag
 (e.g. `openai/qwen2.5:7b` + a matching `model_list` entry).
 
 The upstream defaults point at LiteLLM inside the Docker network — override
@@ -342,13 +351,13 @@ compression. LiteLLM then maps the model name to the real provider via
 `config/litellm.yaml`.
 
 The **worker** takes a separate path: `LORE_WORKER_MODEL` splits on `/` into
-`provider/model`, and the provider part selects the protocol. With no `/`, Lore
-assumes `anthropic` — which makes the worker speak Anthropic to LiteLLM and 404.
-The default `openai/llama3.1:8b` forces the OpenAI protocol, so the worker
-sends plain `llama3.1:8b` to LiteLLM (→ Ollama), exactly like the session model
-sends `deepseek-v4-flash` (→ DeepSeek). Session and worker can therefore use
-different real providers (DeepSeek + Ollama) as long as both use the OpenAI
-protocol through LiteLLM.
+`provider/model`, and the provider ID selects the protocol. Write the `openai`
+provider explicitly. The default `openai/llama3.1:8b` speaks the OpenAI
+protocol, so the worker sends plain `llama3.1:8b` to LiteLLM (→ Ollama), exactly
+like the session model sends `deepseek-v4-flash` (→ DeepSeek). Session and worker
+can therefore use different real backends (DeepSeek + Ollama) as long as both use
+the `openai` provider through LiteLLM — that same-provider constraint is why a
+cross-provider worker pairing fails with wrong credentials / wrong API format.
 
 Check it works:
 

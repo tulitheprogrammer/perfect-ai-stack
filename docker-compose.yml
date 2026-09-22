@@ -38,12 +38,17 @@ services:
       # to the stack dir so clones behave like before)
       - ${AI_STACK_PROJECT_DIR:-.}:/app
     environment:
-      - LORE_UPSTREAM_OPENAI=${LORE_UPSTREAM_OPENAI:-http://litellm:4000/v1}
-      - LORE_UPSTREAM_ANTHROPIC=${LORE_UPSTREAM_ANTHROPIC:-http://litellm:4000/v1}
-      - LORE_WORKER_UPSTREAM=${LORE_WORKER_UPSTREAM:-http://litellm:4000/v1}
-      # Worker model must exist in LiteLLM's model_list (config/litellm.yaml);
-      # the openai/ prefix forces the worker to use the OpenAI protocol so it
-      # reaches LiteLLM instead of the Anthropic protocol (which 404s).
+      # Bare roots, no trailing /v1: Lore appends the API path itself
+      # (gateway builds `${upstreamAnthropic}/v1/models`), so a /v1 suffix
+      # yields /v1/v1/messages (404) and /v1/v1/files (400).
+      - LORE_UPSTREAM_OPENAI=${LORE_UPSTREAM_OPENAI:-http://litellm:4000}
+      - LORE_UPSTREAM_ANTHROPIC=${LORE_UPSTREAM_ANTHROPIC:-http://litellm:4000}
+      - LORE_WORKER_UPSTREAM=${LORE_WORKER_UPSTREAM:-http://litellm:4000}
+      # Worker model must exist in LiteLLM's model_list (config/litellm.yaml).
+      # The openai/ prefix sets providerID, which selects the OpenAI protocol
+      # so worker calls reach LiteLLM instead of the Anthropic protocol.
+      # Workers MUST use the same provider as the session: cross-provider
+      # worker calls fail (wrong credentials / wrong API format).
       - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-openai/llama3.1:8b}
       # Worker -> LiteLLM calls use a dedicated key (any key works: auth is off)
       - LORE_WORKER_API_KEY=${LITELLM_MASTER_KEY:-sk-litellm-master}
