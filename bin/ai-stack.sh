@@ -162,10 +162,23 @@ check_deps() {
 # the given project. Idempotent: creates .git/hooks/pre-commit if missing,
 # appends `lat check` to an existing hook that lacks it, skips if already
 # present. Skipped (with a notice) when the target is not a git repository.
+#
+# The hook is only installed when `lat.md/` exists AND `lat` is runnable:
+# `lat check` exits non-zero without a graph, so installing it into a project
+# that was never initialized would block every commit. Callers run this AFTER
+# scaffolding so the graph is usually present.
 install_lat_hook() {
   local target="$1"
   if [ ! -d "$target/.git" ]; then
     echo "  (not a git repository — skipping pre-commit hook)"
+    return 0
+  fi
+  if [ ! -d "$target/lat.md" ]; then
+    echo "  (no lat.md/ yet — skipping pre-commit hook, re-run setup-lat after lat init)"
+    return 0
+  fi
+  if ! command -v lat >/dev/null 2>&1; then
+    echo "  (lat not on PATH — skipping pre-commit hook)"
     return 0
   fi
   local hook="$target/.git/hooks/pre-commit"
@@ -186,26 +199,35 @@ install_lat_hook() {
 # Scaffold lat.md + the pre-commit hook into a TARGET project. One clone of
 # this package serves every repo:
 #   cd some/project && sh /path/to/perfect-ai-stack/bin/ai-stack.sh setup-lat
-# `lat init` is interactive (it asks which coding agents you use), so it only
-# runs when stdin is a TTY; an unattended run prints a hint instead. Pass
-# "strict" as $2 to fail the command when `lat check` fails (used by the
+#
+# `lat init` is interactive in the sense that it asks which coding agents to
+# wire up, but it does NOT require a TTY: with no input it still creates a
+# valid lat.md/ and prints "you can re-run lat init later". So it always runs
+# (stdin redirected from /dev/null) — the earlier TTY-only guard meant npx and
+# scripted runs left the project without a graph, and the pre-commit hook then
+# failed `lat check` on every commit. Re-run interactively afterwards to pick
+# agents/hooks/MCP.
+# Pass "strict" as $2 to fail the command when `lat check` fails (used by the
 # explicit setup-lat command).
 setup_lat() {
   local target="${1:-$PWD}"
   local strict="${2:-}"
 
-  # 1. Install lat if missing (single global copy, shared by all projects)
-  command -v lat >/dev/null 2>&1 || npm install -g lat.md
+  # 1. Install lat if missing (single global copy, shared by all projects).
+  #    Under npx the global prefix may be unwritable; don't die on that — the
+  #    later steps degrade gracefully when `lat` is absent.
+  if ! command -v lat >/dev/null 2>&1; then
+    npm install -g lat.md || echo "  (could not install lat globally — install it manually: npm i -g lat.md)"
+  fi
 
-  # 2. Scaffold lat.md/ — `lat init` is interactive (it asks which coding
-  #    agents you use), so it only runs when stdin is a TTY; an unattended
-  #    run prints a hint instead. Runs when lat.md/ is missing or still
-  #    contains only the committed placeholder intro file.
+  # 2. Scaffold lat.md/ when missing, or still just the committed placeholder
+  #    intro file (1 file, no sections).
   if [ ! -d "$target/lat.md" ] || [ "$(find "$target/lat.md" -type f 2>/dev/null | wc -l | tr -d ' ')" = "1" ]; then
-    if [ -t 0 ]; then
-      lat init "$target"
+    if command -v lat >/dev/null 2>&1; then
+      (cd "$target" && lat init "$target" < /dev/null) \
+        || echo "  lat.md not initialized — run 'lat init' in $target"
     else
-      echo "  lat.md not initialized in $target — run 'ai-stack setup-lat' interactively"
+      echo "  lat.md not initialized in $target — run 'npm i -g lat.md && lat init'"
     fi
   fi
 
