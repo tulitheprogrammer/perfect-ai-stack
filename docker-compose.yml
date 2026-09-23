@@ -12,9 +12,13 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # No LITELLM_MASTER_KEY on purpose: with it unset, litellm accepts any
-      # key (local single-user stack — lore forwards the client's key, which
-      # would otherwise be rejected as there is no key database).
+      # No LITELLM_MASTER_KEY: Lore forwards the client's key, and with auth
+      # disabled any key is accepted without a key database (local single-user
+      # stack).
+      # LiteLLM >=1.104 refuses to boot without a master key, so opt in to the
+      # unset-key mode explicitly. Do NOT expose port 4000 beyond localhost:
+      # this makes the proxy accept unauthenticated requests.
+      - LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true
       - HF_HOME=/data/headroom/hf
       # Headroom's CCR originals store — relocated onto the host mount
       - HEADROOM_CCR_SQLITE_PATH=/data/headroom/ccr_store.db
