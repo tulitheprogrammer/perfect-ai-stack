@@ -225,12 +225,15 @@ actually chat — distillation after each segment, curation on idle, query
 expansion per recall. Point it at a cloud model and you pay on every session.
 Point it at Ollama and that cost is zero.
 
-**Skip thinking models for the worker.** `qwen3:8b` is a thinking model: it emits
-reasoning before content, so distillation/curation spend tokens reasoning about
-a summarization task and throw the reasoning away (it also gives 200 with empty
-content on a short `max_tokens`). `/no_think` is not a fix — the worker builds
-its own prompts. Thinking is fine for the _session_ model, where you or your IDE
-chose it.
+**Thinking models cost more per worker call, but don't hurt quality.** `qwen3:8b`
+emits reasoning before content, so a short `max_tokens` returns 200 with empty
+content, and every background call spends tokens reasoning about a
+summarization task. That is a **token-cost** issue, not an accuracy one — on the
+eval below it still produced clean, correctly-categorised entries with no
+duplicates. Prefer a non-thinking model to keep the cost down; `/no_think` is
+not a fix, since the worker builds its own prompts.
+
+### Compare models on the real task
 
 ```sh
 ollama pull ministral-3:8b    # non-thinking, 256K context, ~6GB
@@ -249,6 +252,61 @@ This is the recommended shape: **thinking-capable model for the session, local
 non-thinking model for the worker**. It works because both route through
 LiteLLM on the same protocol — see
 [All models route through LiteLLM](#all-models-route-through-litellm).
+
+### Compare models on the real task
+
+Curation quality is not predictable from parameter count, so measure it. This
+sends one fixed conversation (containing 5 known durable facts) to each model
+through the gateway and prints the raw output plus a format check:
+
+```sh
+sh scripts/eval-worker.sh                 # every local model the gateway serves
+sh scripts/eval-worker.sh qwen3:8b         # or specific models
+```
+
+Read-only — it does not write `.lore.md` or touch the database. What to look
+for: valid JSON, correct categories, no duplicate titles, and no invented
+facts. Duplicates are the documented small-model failure mode; hallucinated
+entries are worse than missing ones, since `.lore.md` is committed and reviewed.
+
+A real run's output (model `qwen3:8b`, reformatted from one line):
+
+```json
+[
+  {
+    "category": "decision",
+    "title": "Package Manager Switch",
+    "content": "Switching from npm to pnpm across all repos due to duplicate lockfiles"
+  },
+  {
+    "category": "architecture",
+    "title": "Database Access Pattern",
+    "content": "Auth service must communicate with billing DB only through API gateway"
+  },
+  {
+    "category": "preference",
+    "title": "Python Linting Tool",
+    "content": "Use ruff instead of flake8 for Python linting"
+  },
+  {
+    "category": "gotcha",
+    "title": "Webhook Timeout Handling",
+    "content": "Payments webhook times out without setting Retry-After header on 429 responses"
+  }
+]
+```
+
+```
+    valid JSON: yes
+    entries:    4
+    categories: architecture, decision, gotcha, preference
+    dup titles: 0
+```
+
+4 of 5 facts, correct categories, no duplicates. That is better than the 8B
+small-model reputation suggests — but it still missed the subtlest entry (the
+causal link between the migration incident and the DB rule), which is exactly
+the kind of thing `lat.md` holds better anyway.
 
 **Local quality floors** ([Lore's local-inference guide](https://withlore.ai/docs/guides/local-inference/)):
 
