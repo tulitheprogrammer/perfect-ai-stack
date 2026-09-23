@@ -259,6 +259,22 @@ filtered out, because choosing it fails at request time. Each entry is labelled
 session. Passing an unusable name to `models <session> [worker]` is rejected with
 the available list rather than written.
 
+```
+  Available models (served by the gateway AND usable now):
+    deepseek-v4-flash        cloud
+    deepseek-v4-pro          cloud
+    qwen3:8b                 local   thinking: more tokens per call
+    ministral-3:8b           local
+```
+
+`thinking` is a **hint, not a filter.** Thinking models spend tokens reasoning
+before answering, which costs time per worker call — but it is local and free,
+and the worker is async. It is also not a quality signal: on the measured eval
+the thinking `qwen3:8b` classified facts correctly while the non-thinking
+`ministral-3:8b` did not, so excluding thinking models would have removed the
+better worker. The label is derived from the model name (no capability flag
+exists in `/v1/models` or Ollama's tags), so treat it as a rough hint.
+
 **Session and worker must share one API protocol.** Workers call with the
 session's transport, so a mixed pair (e.g. an Anthropic session with an
 OpenAI worker) fails at runtime with wrong credentials / wrong API format —

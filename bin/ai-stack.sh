@@ -336,6 +336,22 @@ model_protocol() {
   esac
 }
 
+# Advisory note shown next to a model. Purely informational: it never filters
+# the list, because thinking mode is not a reliable quality proxy. Measured on
+# the curation eval, the thinking `qwen3:8b` classified facts correctly while
+# the non-thinking `ministral-3:8b` did not — so excluding thinking models
+# would have removed the better worker.
+#
+# Name-based heuristic on purpose: neither /v1/models nor Ollama's tags expose
+# a reasoning capability flag. Being wrong here only mislabels a hint.
+model_notes() {
+  local m="$1"
+  case "$m" in
+    qwen3*|*qwq*|*deepseek-r1*|*reasoner*) printf 'thinking: more tokens per call' ;;
+    *) printf '' ;;
+  esac
+}
+
 # Show + set the model selection for THIS project.
 #
 # Usage:
@@ -391,9 +407,15 @@ models() {
   fi
   echo ""
   echo "  Available models (served by the gateway AND usable now):"
+  local n b note
   printf '%s\n' "$choices" | while IFS="$(printf '\t')" read -r n b; do
-    printf '    %-24s %s\n' "$n" "$b"
+    [ -n "$n" ] || continue
+    note="$(model_notes "$n")"
+    printf '    %-24s %-7s %s\n' "$n" "$b" "$note"
   done
+  echo ""
+  echo "  'thinking' is a hint, not a restriction: it costs extra tokens per call,"
+  echo "  which is local and free here. Prefer it when quality matters."
   echo ""
 
   # Non-interactive: `ai-stack models <session> <worker>` sets directly, but
@@ -516,8 +538,11 @@ show_model_state() {
   w="$(read_model_field "$cfg" workerModel)"
   c="$(read_curator "$cfg")"
   echo "  Current selection ($cfg):"
-  echo "    session: ${s:-qwen3:8b (env default)}"
-  echo "    worker:  ${w:-$s (follows session)}"
+  local note
+  note="$(model_notes "$s")"
+  echo "    session: ${s:-qwen3:8b (env default)}${note:+   ($note)}"
+  note="$(model_notes "$w")"
+  echo "    worker:  ${w:-$s (follows session)}${note:+   ($note)}"
   case "$c" in
     true)  echo "    curator: on   — writes .lore.md (needs a capable model)" ;;
     false) echo "    curator: off  — opt in with: ai-stack models --curator on" ;;
