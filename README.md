@@ -248,8 +248,23 @@ npx perfect-ai-stack models --help
 
 Bare `models` prints the effective selection and **warns if a chosen model is
 not usable** — otherwise that only surfaces later as a confusing
-`Invalid model name` at request time. Interactive runs show the current value
-as the default, so pressing Enter keeps it.
+`Invalid model name` at request time.
+
+Interactive runs use an **arrow-key menu** (up/down to move, Enter to select,
+`q` to cancel) instead of typing a name, so a typo cannot happen:
+
+```
+  Worker model :
+  > qwen3:8b                 local    thinking: more tokens
+    ministral-3:8b           local
+  up/down move   Enter select   q cancel
+```
+
+The **worker menu lists local models only.** Choosing a remote worker is what
+meters the stack, and hiding those entries turns an easy mistake into an
+impossible one — remote workers remain available via `--yes` for the case where
+a local model genuinely cannot curate. Piped input and non-TTY shells fall back
+to typed entry automatically, so scripted use is unchanged.
 
 **Only usable models are offered.** The list is the intersection of what the
 gateway serves (so LiteLLM knows its provider, key and pricing) and what is

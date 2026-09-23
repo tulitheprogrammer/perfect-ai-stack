@@ -458,17 +458,26 @@ models() {
   local cur_s cur_w
   cur_s="$(read_model_field "$cfg" model)"
   cur_w="$(read_model_field "$cfg" workerModel)"
-  # Defaults must be offerable: prefer the current value, then the shipped
-  # default, then whatever is actually available. Falling back to a hardcoded
-  # name that is not pulled would hand the user an unusable default.
+  # Defaults must be offerable AND safe. The worker default must never be a
+  # remote model: pressing Enter on a remote worker would silently start
+  # metering, which is the whole thing the confirmation step exists to prevent.
+  # Prefer the current value, then the shipped local default, then any LOCAL
+  # model, and only fall back to whatever exists if there is no local at all.
   [ -n "$cur_s" ] || cur_s="$(avail_names | head -1)"
-  [ -n "$cur_w" ] || cur_w="$cur_s"
+  if [ -z "$cur_w" ] || ! model_is_local "$cur_w"; then
+    if model_is_available "qwen3:8b" && model_is_local "qwen3:8b"; then
+      cur_w="qwen3:8b"
+    else
+      cur_w="$(available_models | awk -F'\t' '$2=="local" {print $1; exit}')"
+      [ -n "$cur_w" ] || cur_w="$cur_s"
+    fi
+  fi
 
   local session worker
-  prompt_available_model "  Session model" "$cur_s" && session="$REPLY" || return 1
+  prompt_available_model "  Session model" "$cur_s" "any" && session="$REPLY" || return 1
   echo "  Worker runs on every session (distillation/curation). Keep it LOCAL and"
   echo "  free: qwen3:8b is the measured-best local model (scripts/eval-worker.sh)."
-  prompt_available_model "  Worker model " "$cur_w" && worker="$REPLY" || return 1
+  prompt_available_model "  Worker model " "$cur_w" "local" && worker="$REPLY" || return 1
 
   check_same_protocol "$session" "$worker" || return 1
   confirm_remote_worker "$worker" "" || return 1
@@ -528,14 +537,42 @@ avail_names() {
 }
 
 # Prompt until the answer is an available model. Empty keeps the default.
-# Sets REPLY. Returns 1 if the user exhausts retries or cancels.
+#
+# On a terminal with arrow-key support this is a menu: up/down to move, Enter to
+# choose, q to cancel. `local_only` = "local" restricts the menu to local models
+# (used for the worker, where a remote pick meters every session).
+#
+# On a plain pipe or a terminal without the needed escape handling, falls back
+# to typed input — the previous behaviour — so scripted use still works.
+# Sets REPLY. Returns 1 on cancel or too many invalid attempts.
 prompt_available_model() {
-  local label="$1" default="$2" answer tries=0
+  local label="$1" default="$2" filter="${3:-any}"
+
+  local options
+  options="$(available_models | while IFS="$(printf '\t')" read -r n b; do
+    [ -n "$n" ] || continue
+    if [ "$filter" = "local" ] && [ "$b" != "local" ]; then continue; fi
+    printf '%s\t%s\n' "$n" "$b"
+  done)"
+
+  # Menu only when we can read single keys. `read -rsn1` needs bash; this script
+  # is run by sh, so probe for bash explicitly and fall back if absent.
+  if [ -t 0 ] && [ -t 1 ] && command -v bash >/dev/null 2>&1; then
+    select_model_menu "$label" "$default" "$options" && return 0
+  fi
+
+  # Fallback: typed entry.
+  local answer tries=0
   while [ "$tries" -lt 5 ]; do
     printf "%s [%s]: " "$label" "$default"
     read -r answer
     answer="${answer:-$default}"
     if model_is_available "$answer"; then
+      if [ "$filter" = "local" ] && ! model_is_local "$answer"; then
+        echo "    '$answer' is remote; the worker must be local here."
+        tries=$((tries + 1))
+        continue
+      fi
       REPLY="$answer"
       return 0
     fi
@@ -545,6 +582,30 @@ prompt_available_model() {
   done
   echo "  Too many invalid attempts — nothing changed."
   return 1
+}
+
+# Arrow-key menu. Runs bash (scripts/select-model) because reading a single
+# keypress needs `read -rsn1`, and this script is POSIX sh.
+# Sets REPLY. Returns 1 if cancelled.
+#
+# The model list is piped on STDIN rather than passed as argv: names contain
+# colons and the kind is tab-separated, and unquoted word-splitting on a tab
+# would split each pair into two argv entries and pair them wrong.
+select_model_menu() {
+  local label="$1" default="$2" options="$3"
+  local pick
+
+  # List on fd 3; stdin stays free for the terminal's keypresses.
+  pick="$(bash "$DIR/scripts/select-model" "$label" "$default" 3<<EOF
+$options
+EOF
+)" || {
+    echo "  Cancelled — nothing changed."
+    return 1
+  }
+  [ -n "$pick" ] || { echo "  Cancelled — nothing changed."; return 1; }
+  REPLY="$pick"
+  return 0
 }
 
 # Refuse a session/worker pair that speaks different protocols. Lore's docs:
@@ -766,18 +827,35 @@ wait_for_gateway() {
 }
 
 # The one thing every new user needs and can't guess: what to put in their IDE.
+#
+# Reports the ACTUAL selection from .lore.json rather than a static blurb — the
+# IDE talks to the SESSION model only, so the worker is shown separately as
+# context (it is never typed into an editor).
 print_client_config() {
+  local cfg="$PWD/.lore.json"
+  local s w
+  s="$(read_model_field "$cfg" model)"; [ -n "$s" ] || s="qwen3:8b"
+  w="$(read_model_field "$cfg" workerModel)"
+
   echo ""
   echo "  Point your IDE / coding agent at:"
   echo ""
   echo "    Base URL:  http://localhost:3207/v1"
   echo "    API key:   any non-empty string (auth is off on this local stack)"
-  echo "    Model:     qwen3:8b        (free, local via Ollama)"
-  echo "               deepseek-v4-flash   (needs OPENAI_API_KEY)"
+  echo "    Model:     $s"
+  case "$s" in
+    deepseek*) echo "               (remote — needs OPENAI_API_KEY in your environment)" ;;
+    *)         echo "               (local via Ollama)" ;;
+  esac
   echo ""
+  if [ -n "$w" ]; then
+    echo "    Background worker (not typed into the IDE): $w"
+    model_is_local "$w" || echo "      ! remote worker — bills on every session"
+  fi
   echo "  Verify it answers:  curl -s http://localhost:3207/v1/models"
   echo "  Memory dashboard:   http://localhost:3207/ui"
   echo "  Gateway logs:       ai-stack logs"
+  echo "  Change models:      ai-stack models"
   echo ""
 }
 

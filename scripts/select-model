@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# select-model — arrow-key menu for choosing a model.
+#
+# Invoked by ai-stack.sh as a separate process for one reason: the main script
+# is POSIX sh, and reading a single keypress without Enter needs bash's
+# `read -rsn1`. Keeping it in bash here avoids the nested-quoting mess of
+# embedding bash inside a sh heredoc.
+#
+# Usage:  select-model <label> <default> 3< <(printf 'name<TAB>kind\n')
+# Stdout: the chosen model name, or nothing if cancelled.
+# Exit:   0 chosen, 2 cancelled.
+#
+# The model list arrives on file descriptor 3, NOT stdin: keypresses are read
+# from the terminal on stdin, so sharing stdin would make the list and the
+# keyboard input fight for the same stream.
+#
+# Arrow keys / j / k move, Enter selects, q cancels. Redraws in place rather
+# than scrolling, and restores the cursor if interrupted.
+
+set -eu
+
+label="${1:-Model}"
+default="${2:-}"
+
+names=()
+kinds=()
+while IFS=$'\t' read -r nm kd <&3; do
+  [ -n "$nm" ] || continue
+  names+=("$nm")
+  kinds+=("${kd:--}")
+done
+
+n=${#names[@]}
+if [ "$n" -eq 0 ]; then
+  echo "  (no models available)" >&2
+  exit 1
+fi
+
+sel=0
+for i in "${!names[@]}"; do
+  [ "${names[$i]}" = "$default" ] && sel=$i
+done
+
+# Cosmetic name-based hint; see model_notes in ai-stack.sh for why this is not
+# a filter.
+note_for() {
+  case "$1" in
+    qwen3*|*qwq*|*deepseek-r1*) printf '  thinking: more tokens' ;;
+    *) printf '' ;;
+  esac
+}
+
+drawn=0
+cleanup() {
+  # Leave the cursor visible and the styling reset if we exit mid-draw.
+  printf '\033[?25h\033[0m' >&2
+}
+trap cleanup EXIT
+printf '\033[?25l' >&2   # hide cursor during the menu
+
+# Everything the user SEES goes to stderr; only the final choice goes to
+# stdout. That keeps `pick=$(select-model ...)` clean — otherwise the caller
+# captures the rendered menu as the selection.
+draw() {
+  [ "$drawn" -gt 0 ] && printf '\033[%dA' "$drawn" >&2
+  printf '  %s:\n' "$label" >&2
+  local i marker
+  for i in "${!names[@]}"; do
+    if [ "$i" -eq "$sel" ]; then marker=$'  \033[7m>\033[0m '; else marker='    '; fi
+    printf '%b%-24s %-7s%s\033[K\n' \
+      "$marker" "${names[$i]}" "${kinds[$i]}" "$(note_for "${names[$i]}")" >&2
+  done
+  printf '  \033[2mup/down move   Enter select   q cancel\033[0m\033[K\n' >&2
+  drawn=$((n + 2))
+}
+
+draw
+while true; do
+  IFS= read -rsn1 key || exit 2
+  case "$key" in
+    "") break ;;                                    # Enter
+    q|Q) exit 2 ;;
+    j) sel=$(( (sel + 1) % n )) ;;
+    k) sel=$(( (sel - 1 + n) % n )) ;;
+    $'\033')
+      # ANSI arrow: ESC [ A/B (up/down).
+      #
+      # macOS ships bash 3.2, whose `read -t` accepts ONLY integers — a
+      # fractional timeout like 0.05 makes read fail outright, silently
+      # swallowing the sequence so the arrow keys appear dead. Use the integer
+      # form: a real keypress follows ESC immediately, so the timeout is never
+      # paid in practice.
+      IFS= read -rsn2 -t 1 rest || rest=""
+      case "$rest" in
+        '[A') sel=$(( (sel - 1 + n) % n )) ;;
+        '[B') sel=$(( (sel + 1) % n )) ;;
+      esac
+      ;;
+  esac
+  draw
+done
+
+printf '\033[?25h' >&2
+printf '%s' "${names[$sel]}"
