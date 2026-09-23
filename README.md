@@ -221,6 +221,21 @@ list shows comes from this file — `curl -s http://localhost:3207/v1/models`.
 Ready-made local block for `qwen2.5-coder:14b` is already commented into
 `config/litellm.yaml`; uncomment it after pulling the model.
 
+### Don't point Lore directly at Ollama
+
+Lore's [local-inference guide](https://withlore.ai/docs/guides/local-inference/)
+shows `LORE_UPSTREAM_OLLAMA=http://localhost:11434` for talking to a local
+server without a proxy. **That env var does not exist in the gateway version
+pinned here** (`@loreai/gateway` 0.40.0 reads only `LORE_UPSTREAM_OPENAI` and
+`LORE_UPSTREAM_ANTHROPIC`), so setting it is a silent no-op.
+
+Even on a newer gateway, prefer routing through LiteLLM: `LORE_UPSTREAM_*` is
+where Lore forwards the session, so bypassing LiteLLM also bypasses
+**Headroom compression**, and you'd lose the provider routing that
+`config/litellm.yaml` centralises. Local models here are local _because
+LiteLLM's `api_base` points at your Ollama host_ — not because Lore knows
+Ollama exists.
+
 ## One stack, many projects
 
 The stack is cloned **once** — every project you work in uses the same
