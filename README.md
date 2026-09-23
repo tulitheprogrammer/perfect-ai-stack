@@ -1,9 +1,10 @@
 # perfect-ai-stack
 
-**AI proxy stack** 
-LiteLLM (with Headroom compression sidecar) 
-+ Lore in Docker,
-+ per-repo lat.md knowledge graph scaffolded git-hook enforcement.
+**AI proxy stack**
+LiteLLM (with Headroom compression sidecar)
+
+- Lore in Docker,
+- per-repo lat.md knowledge graph scaffolded git-hook enforcement.
 
 ```
 // e.g using Zed IDE
@@ -20,14 +21,14 @@ npx perfect-ai-stack init
 ```
 
 `init` starts the gateway, scaffolds `lat.md/` + the pre-commit hook, and
-prints the IDE config to use. Safe to re-run; 
-if the gateway is already up it, skips startup instead of restarting it. 
+prints the IDE config to use. Safe to re-run;
+if the gateway is already up it, skips startup instead of restarting it.
 Requires Docker Desktop (see [Prerequisites](#prerequisites)).
 
 `npx` installs the package into npm's cache and runs `bin/ai-stack.sh` from
-there. 
+there.
 Project files (`.env`, `lat.md/`, git hooks) always land in the project
-you run it from. 
+you run it from.
 
 Keep the memory DB and Headroom cache out of the npx cache dir, so they survive upgrades:
 
@@ -40,7 +41,7 @@ Working on the stack itself? Clone it and see
 
 ## Prerequisites
 
-**Docker Desktop, installed and running.** 
+**Docker Desktop, installed and running.**
 That's the only requirement — no API keys needed to try it (local models run through Ollama).
 
 ```sh
@@ -69,7 +70,7 @@ Model:     [ollama model](https://withlore.ai/docs/guides/local-inference/#ollam
 No IDE config to write: the same endpoint works for Zed, Cursor, VS Code
 (Continue/Copilot), and anything else that takes a custom base URL.
 
-**Already use a tool with built-in memory or context compression?** 
+**Already use a tool with built-in memory or context compression?**
 Read [Choosing what to use](#choosing-what-to-use) before pointing it here — for
 Claude Code and Copilot you likely want only part of this stack.
 
@@ -366,14 +367,122 @@ No keys needed — `llama3.1:8b` routes through LiteLLM to Ollama on the host.
 
 ## Architecture
 
+### Request flow
+
+One box means one network hop. Everything above the "Docker network" line runs
+in a container; Ollama runs **on the host**, which is why LiteLLM reaches it at
+`host.docker.internal` rather than a service name.
+
+```mermaid
+flowchart TB
+    subgraph clients["Your IDE / agent"]
+        IDE["Zed, Cursor, VS Code,\nContinue, Claude Code…"]
+    end
+
+    subgraph net["Docker network"]
+        LORE["ai-lore — Lore gateway :3207\nmemory + context + recall"]
+        LL["ai-litellm — LiteLLM :4000\nprovider routing\n+ Headroom callback"]
+    end
+
+    subgraph host["Host machine — not Docker"]
+        OLL["Ollama :11434\nllama3.1:8b"]
+    end
+
+    DS["DeepSeek API"]
+    AN["Anthropic API"]
+    OA["OpenAI API"]
+
+    IDE -->|"http://localhost:3207/v1\nOpenAI-compatible"| LORE
+    LORE -->|"LORE_UPSTREAM_OPENAI\nbear root, no /v1"| LL
+    LL -->|"host.docker.internal:11434"| OLL
+    LL --> DS
+    LL --> AN
+    LL --> OA
 ```
-┌──────────┐     ┌──────────┐     ┌────────────────────┐     ┌──────────────┐
-│  Zed     │ ──> │  Lore    │ ──> │  LiteLLM + Headroom│ ──> │  DeepSeek    │
-│  Editor  │     │ (:3207)  │     │  (Docker:4000)     │     │  Anthropic   │
-│          │     │ (Docker) │     │                    │ ──> │  OpenAI      │
-└──────────┘     └──────────┘     └────────────────────┘     │  Ollama      │
-                                                              └──────────────┘
+
+Lore is the OpenAI-compatible `/v1` endpoint your IDE talks to. It is the only
+port you point a client at; `:4000` is LiteLLM's own API and is not part of the
+user-facing path.
+
+### What happens on one request
+
+```mermaid
+sequenceDiagram
+    participant IDE as IDE
+    participant L as Lore :3207
+    participant LL as LiteLLM :4000
+    participant H as Headroom (in-process)
+    participant P as Provider
+
+    IDE->>L: POST /v1/chat/completions
+    L->>L: resolve project (git remote)
+    L->>L: load memory + lat.md sections
+    L->>L: build gradient context window
+    L->>LL: POST /v1/chat/completions
+    LL->>H: pre-call hook
+    H->>H: compress messages\n(JSON / code / prose)
+    H-->>LL: compressed messages
+    LL->>P: route by model_name
+    P-->>LL: completion
+    LL-->>L: completion (unmodified)
+    L->>L: store turn, queue distillation
+    L-->>IDE: completion
 ```
+
+Two things worth noting in that flow: Headroom compresses the **request only**
+(responses pass through untouched), and the memory write happens on the way
+back so a slow distillation never blocks your reply.
+
+### Session vs worker
+
+This is the part that most affects cost. The **worker** runs three background
+pipelines — distillation, curation, query expansion — on every session,
+whether or not you chat.
+
+```mermaid
+flowchart LR
+    TURN["session turn"] --> SESS["session model\nLORE from .lore.json 'model'"]
+    TURN --> STORE["temporal store\ndata/lore/lore.db"]
+    STORE --> W["worker model\n.lore.json 'workerModel'\n(env fallback LORE_WORKER_MODEL)"]
+    W --> D["distillation\n7B ok"]
+    W --> C["curation\n32B+ preferred"]
+    W --> Q["query expansion\n7B ok"]
+    D --> CTX["context window\nnext turn"]
+    C --> LTM[".lore.md\nknowledge"]
+```
+
+Both models must be the **same provider** (here: `openai` via LiteLLM) —
+cross-provider worker calls fail. Point the worker at a local model to keep
+this at zero cost; see [Make the worker a local model](#make-the-worker-a-local-model).
+
+### Where state lives
+
+Everything stateful is on the host, so it survives `stop`, `update`, and
+`docker compose down`.
+
+```mermaid
+flowchart TB
+    subgraph bind["host bind mounts"]
+        LR["data/lore/\nLore memory DB + vectors"]
+        HR["data/headroom/\nHF model cache + CCR store"]
+    end
+    subgraph proj["your project — bind-mounted at /app"]
+        LM["lat.md/\nknowledge graph"]
+        LF[".lore.md\nexported knowledge"]
+        LJSON[".lore.json\nmodel selection"]
+    end
+    LORE["ai-lore"]
+    LL["ai-litellm"]
+    LORE --- LR
+    LORE --- LM
+    LORE --- LF
+    LORE --- LJSON
+    LL --- HR
+```
+
+The container itself is disposable: `lat.md/`, `.lore.md`, and `.lore.json`
+are meant to be committed, while `data/` holds the machine-local DB and is
+gitignored.
 
 ## IDE / agent setup (BYOK)
 
