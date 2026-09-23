@@ -27,8 +27,13 @@ Requires Docker Desktop (see [Prerequisites](#prerequisites)).
 
 `npx` installs the package into npm's cache and runs `bin/ai-stack.sh` from
 there.
-Project files (`.env`, `lat.md/`, git hooks) always land in the project
-you run it from.
+Project files (`lat.md/`, git hooks) always land in the project you run it
+from.
+
+`init` does **not** write a `.env`, and it never prompts — keys are read from
+your shell environment (Docker Compose interpolates them directly). Run
+`npx perfect-ai-stack wizard` separately if you'd rather persist them to a file;
+see [Where to put API keys](#where-to-put-api-keys).
 
 Keep the memory DB and Headroom cache out of the npx cache dir, so they survive upgrades:
 
@@ -547,7 +552,9 @@ indirection; see `.env.example.md`).
 
 ### Where to put API keys
 
-Either export them in your shell profile (`~/.zshrc`, `~/.bashrc`):
+**The shell is the default and needs no file.** Export them in your shell
+profile (`~/.zshrc`, `~/.bashrc`) and Compose picks them up when you start the
+stack:
 
 ```sh
 export DEEPSEEK_API_KEY="sk-..."
@@ -558,19 +565,22 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 works and is used as a fallback if `DEEPSEEK_API_KEY` is unset. Setting both is
 fine — `DEEPSEEK_API_KEY` wins.)
 
-or write them to a repo-local `.env` file (auto-loaded by Docker Compose,
-gitignored). A template with every supported variable (zero secrets) is
-committed as [`.env.example.md`](.env.example.md) — copy it to `.env` and
-adjust. The wizard (`ai-stack.sh wizard`) can generate this for you too:
+Alternatively, write them to a `.env` file (gitignored). Note where it has to
+go: **Compose only auto-loads `.env` from the stack directory**, not from the
+project you run `init` in. A template with every supported variable (zero
+secrets) is committed as [`.env.example.md`](.env.example.md) — copy it to
+`.env` in the stack dir and adjust. The wizard (`ai-stack wizard`) can generate
+it for you:
 
 ```sh
 DEEPSEEK_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Don't override the `LORE_*` variables unless you need to — the defaults
-(shown in `.env.example.md`) point Lore at LiteLLM, and that's where you
-want it (see the stale-env warning in Quick start).
+Use `.env` when you want values that differ per stack checkout, or keys you
+don't want in your shell profile. Don't override the `LORE_*` variables unless
+you need to — the defaults (shown in `.env.example.md`) point Lore at LiteLLM,
+and that's where you want it (see the stale-env warning in Quick start).
 
 ### LiteLLM
 
