@@ -247,9 +247,33 @@ npx perfect-ai-stack models --help
 ```
 
 Bare `models` prints the effective selection and **warns if a chosen model is
-not served by the gateway** — otherwise that only surfaces later as a confusing
+not usable** — otherwise that only surfaces later as a confusing
 `Invalid model name` at request time. Interactive runs show the current value
 as the default, so pressing Enter keeps it.
+
+**Only usable models are offered.** The list is the intersection of what the
+gateway serves (so LiteLLM knows its provider, key and pricing) and what is
+actually reachable now — a local model that is configured but not pulled is
+filtered out, because choosing it fails at request time. Each entry is labelled
+`local` or `cloud`, which matters for the worker: cloud models bill on every
+session. Passing an unusable name to `models <session> [worker]` is rejected with
+the available list rather than written.
+
+**Session and worker must share one API protocol.** Workers call with the
+session's transport, so a mixed pair (e.g. an Anthropic session with an
+OpenAI worker) fails at runtime with wrong credentials / wrong API format —
+invisibly, since it only breaks background distillation. The CLI derives each
+model's protocol and refuses a mismatch before writing anything:
+
+```
+  Refusing: session (claude-3-5-sonnet -> anthropic) and worker (qwen3:8b -> openai) use different
+  APIs. Lore's workers must match the session's protocol — a mixed pair
+  fails at runtime with wrong credentials / wrong API format.
+```
+
+Every model this stack ships is OpenAI-protocol through LiteLLM, so the
+constraint is satisfied by default — it only bites if you add an Anthropic
+entry to `config/litellm.yaml` and pair it with a local worker.
 
 Everything lands in `.lore.json` at your project root:
 

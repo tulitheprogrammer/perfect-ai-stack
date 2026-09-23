@@ -285,10 +285,55 @@ gateway_is_up() {
   curl -sf -o /dev/null --max-time 3 http://localhost:3207/v1/models 2>/dev/null
 }
 
-# List the models available to pick as session/worker.
+# Models this project can actually use: served by the gateway (so LiteLLM
+# knows the provider, key and pricing) AND, for Ollama-backed models, pulled.
+# A model that is in config/litellm.yaml but not pulled registers fine and then
+# fails at request time with a confusing "model not found" — so it is not
+# "available", and must not be offered as a choice.
+#
+# Prints `name<TAB>local|cloud`. Anything Ollama has a tag for is local; the
+# rest are cloud providers reached through LiteLLM.
 available_models() {
-  curl -sf --max-time 5 http://localhost:3207/v1/models 2>/dev/null \
-    | tr ',' '\n' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+  local served pulled
+  served="$(curl -sf --max-time 5 http://localhost:3207/v1/models 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' || true)"
+  pulled="$(curl -sf --max-time 5 http://localhost:11434/api/tags 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' || true)"
+  [ -n "$served" ] || return 0
+
+  # Any served name that is not pulled is unusable UNLESS it is a cloud model.
+  # Cloud models never appear in the Ollama list, and local names always carry
+  # a tag, so a served name matching no pulled tag AND containing ':' is a
+  # local tag that is missing; without ':' it is a cloud model.
+  local m
+  printf '%s\n' "$served" | while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    if printf '%s\n' "$pulled" | grep -qxF "$m"; then
+      printf '%s\tlocal\n' "$m"
+    elif printf '%s\n' "$m" | grep -q ':'; then
+      : # local-style tag, not pulled -> unusable, skip
+    else
+      printf '%s\tcloud\n' "$m"
+    fi
+  done
+}
+
+# Is this exact model usable right now?
+model_is_available() {
+  available_models | cut -f1 | grep -qxF "$1"
+}
+
+# Protocol a model speaks, derived from its LiteLLM provider entry. Anything
+# on Ollama or DeepSeek speaks OpenAI; Anthropic entries speak the Messages
+# API. Workers MUST match the session's protocol — cross-protocol calls fail
+# (wrong credentials, wrong API format). Defaults to "openai" when unknown,
+# which is correct for every model this stack ships.
+model_protocol() {
+  local m="$1"
+  case "$m" in
+    claude*|anthropic*) printf 'anthropic' ;;
+    *) printf 'openai' ;;
+  esac
 }
 
 # Show + set the model selection for THIS project.
@@ -337,24 +382,43 @@ models() {
     case "$go" in [Yy]*) ;; *) return 0 ;; esac
   fi
 
-  echo ""
-  echo "Available models (served by the gateway):"
-  local names
-  names="$(available_models)"
-  if [ -z "$names" ]; then
-    echo "  (gateway not reachable — run 'ai-stack start' first)"
+  local choices
+  choices="$(available_models)"
+  if [ -z "$choices" ]; then
+    echo ""
+    echo "  No models available — is the gateway running? ('ai-stack start')"
     return 1
   fi
-  echo "$names" | sed 's/^/  - /'
+  echo ""
+  echo "  Available models (served by the gateway AND usable now):"
+  printf '%s\n' "$choices" | while IFS="$(printf '\t')" read -r n b; do
+    printf '    %-24s %s\n' "$n" "$b"
+  done
   echo ""
 
-  # Non-interactive: `ai-stack models <session> <worker>` sets directly.
+  # Non-interactive: `ai-stack models <session> <worker>` sets directly, but
+  # only after validating both against the available list. Writing a name that
+  # is not served turns into "Invalid model name" at request time, which reads
+  # as a broken stack rather than a typo.
   if [ -n "${1:-}" ]; then
-    write_model_choice "$target" "${1}" "${2:-}"
+    local want_s="$1" want_w="${2:-}"
+    if ! model_is_available "$want_s"; then
+      echo "  '$want_s' is not available. Pick one of:"
+      avail_names | sed 's/^/    /'
+      return 1
+    fi
+    if [ -n "$want_w" ] && ! model_is_available "$want_w"; then
+      echo "  '$want_w' is not available. Pick one of:"
+      avail_names | sed 's/^/    /'
+      return 1
+    fi
+    check_same_protocol "$want_s" "${want_w:-$want_s}" || return 1
+    write_model_choice "$target" "$want_s" "$want_w"
     echo ""
     show_model_state "$cfg"
     return 0
   fi
+
   if [ ! -t 0 ]; then
     echo "  To set models non-interactively:"
     echo "    ai-stack models <session-model> [worker-model]"
@@ -364,17 +428,66 @@ models() {
   local cur_s cur_w
   cur_s="$(read_model_field "$cfg" model)"
   cur_w="$(read_model_field "$cfg" workerModel)"
-  printf "  Session model [%s]: " "${cur_s:-qwen3:8b}"
-  read -r session
-  session="${session:-${cur_s:-qwen3:8b}}"
-  echo "  Worker runs on every session (distillation/curation) — keep it LOCAL and"
-  echo "  free. qwen3:8b is the measured-best local model (see scripts/eval-worker.sh)."
-  printf "  Worker model  [%s]: " "${cur_w:-qwen3:8b}"
-  read -r worker
-  worker="${worker:-${cur_w:-qwen3:8b}}"
+  # Defaults must be offerable: prefer the current value, then the shipped
+  # default, then whatever is actually available. Falling back to a hardcoded
+  # name that is not pulled would hand the user an unusable default.
+  [ -n "$cur_s" ] || cur_s="$(avail_names | head -1)"
+  [ -n "$cur_w" ] || cur_w="$cur_s"
+
+  local session worker
+  prompt_available_model "  Session model" "$cur_s" && session="$REPLY" || return 1
+  echo "  Worker runs on every session (distillation/curation). Keep it LOCAL and"
+  echo "  free: qwen3:8b is the measured-best local model (scripts/eval-worker.sh)."
+  prompt_available_model "  Worker model " "$cur_w" && worker="$REPLY" || return 1
+
+  check_same_protocol "$session" "$worker" || return 1
   write_model_choice "$target" "$session" "$worker"
   echo ""
   show_model_state "$cfg"
+}
+
+# Just the names, one per line.
+avail_names() {
+  available_models | cut -f1
+}
+
+# Prompt until the answer is an available model. Empty keeps the default.
+# Sets REPLY. Returns 1 if the user exhausts retries or cancels.
+prompt_available_model() {
+  local label="$1" default="$2" answer tries=0
+  while [ "$tries" -lt 5 ]; do
+    printf "%s [%s]: " "$label" "$default"
+    read -r answer
+    answer="${answer:-$default}"
+    if model_is_available "$answer"; then
+      REPLY="$answer"
+      return 0
+    fi
+    echo "    '$answer' is not available. Choose from the list above (or add it"
+    echo "    to config/litellm.yaml and run 'ai-stack restart')."
+    tries=$((tries + 1))
+  done
+  echo "  Too many invalid attempts — nothing changed."
+  return 1
+}
+
+# Refuse a session/worker pair that speaks different protocols. Lore's docs:
+# "cross-provider calls always fail (wrong credentials, wrong API format)".
+# Better to block it here than fail asynchronously in a background worker.
+check_same_protocol() {
+  local s p_s w p_w
+  s="$1"; w="$2"
+  p_s="$(model_protocol "$s")"
+  p_w="$(model_protocol "$w")"
+  if [ "$p_s" != "$p_w" ]; then
+    echo ""
+    echo "  Refusing: session ($s -> $p_s) and worker ($w -> $p_w) use different"
+    echo "  APIs. Lore's workers must match the session's protocol — a mixed pair"
+    echo "  fails at runtime with wrong credentials / wrong API format."
+    echo "  Pick two models on the same API (both OpenAI-compatible here)."
+    return 1
+  fi
+  return 0
 }
 
 show_models_help() {
@@ -411,20 +524,17 @@ show_model_state() {
     *)     echo "    curator: off  — opt in with: ai-stack models --curator on" ;;
   esac
 
-  # Warn when a chosen model is not currently served: the failure otherwise
+  # Warn when a chosen model is not usable right now: the failure otherwise
   # only appears at request time as a confusing "Invalid model name".
-  local avail
-  avail="$(available_models)"
-  if [ -n "$avail" ]; then
-    local m
-    for m in "$s" "$w"; do
-      [ -n "$m" ] || continue
-      if ! printf '%s\n' "$avail" | grep -qxF "$m"; then
-        echo "    ! '$m' is not served by the gateway — add it to config/litellm.yaml"
-        echo "      then run: ai-stack restart"
-      fi
-    done
-  fi
+  local m
+  for m in "$s" "$w"; do
+    [ -n "$m" ] || continue
+    if ! model_is_available "$m"; then
+      echo "    ! '$m' is not available (not served, or a local model that is not pulled)"
+      echo "      add it to config/litellm.yaml and run: ai-stack restart"
+      echo "      local models also need: ollama pull $m"
+    fi
+  done
 }
 
 # Read modelID from a .lore.json path (model or workerModel); empty if unset.
