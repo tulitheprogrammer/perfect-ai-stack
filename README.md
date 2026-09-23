@@ -197,15 +197,15 @@ switching models needs no restart and doesn't affect other projects.
 
 ```sh
 npx perfect-ai-stack models                              # list + pick interactively
-npx perfect-ai-stack models deepseek-v4-flash qwen3:8b  # session, worker can be either qwen2.5:3b-instruct/qwen2.5:1.5b-instruct/qwen3:8b - non-thinking by default
+npx perfect-ai-stack models qwen3:8b ministral-3:8b     # session, then worker
 ```
 
 That writes `.lore.json`:
 
 ```json
 {
-  "model": { "providerID": "openai", "modelID": "deepseek-v4-flash" },
-  "workerModel": { "providerID": "openai", "modelID": "qwen3:8b" }
+  "model": { "providerID": "openai", "modelID": "qwen3:8b" },
+  "workerModel": { "providerID": "openai", "modelID": "ministral-3:8b" }
 }
 ```
 
@@ -225,25 +225,27 @@ actually chat — distillation after each segment, curation on idle, query
 expansion per recall. Point it at a cloud model and you pay on every session.
 Point it at Ollama and that cost is zero.
 
-**Skip thinking models for the worker.** `qwen3:8b` is the default because it's
-capable, but it reasons before answering, and distillation/curation gain nothing
-from that — so every background call spends tokens on reasoning it throws away.
-A non-thinking local model is cheaper and faster for the same worker output.
-`/no_think` in a prompt is not a fix here, since the worker builds its own
-prompts. (For the _session_ model, thinking is fine — it's you or your IDE
-choosing it.)
+**Skip thinking models for the worker.** `qwen3:8b` is a thinking model: it emits
+reasoning before content, so distillation/curation spend tokens reasoning about
+a summarization task and throw the reasoning away (it also gives 200 with empty
+content on a short `max_tokens`). `/no_think` is not a fix — the worker builds
+its own prompts. Thinking is fine for the _session_ model, where you or your IDE
+chose it.
 
 ```sh
-ollama pull qwen2.5-coder:14b                       # non-thinking, good curation
-npx perfect-ai-stack models qwen3:8b qwen2.5-coder:14b
+ollama pull ministral-3:8b    # non-thinking, 256K context, ~6GB
+npx perfect-ai-stack models qwen3:8b ministral-3:8b
 ```
 
-Add the worker to `config/litellm.yaml` first if it isn't listed — the
-`qwen2.5-coder:14b` block is already there, commented out. To stay on
-`qwen3:8b` for both (simplest, one pull), pass it as the worker too and accept
-the extra reasoning tokens.
+**Why `ministral-3:8b` over `llama3.1:8b`:** both are non-thinking 8B-class and
+both work. Ministral has **256K context vs 128K** (so distillation segments and
+the curator's entry context get split or truncated less often) and is a year
+newer. Llama 3.1 is the conservative pick if you want ~1GB less disk (4.9GB vs
+6.0GB) and the most battle-tested option. Add whichever you choose to
+`config/litellm.yaml` first — both blocks are pre-written, one active and one
+commented.
 
-This is the recommended shape: **capable model for the session, local
+This is the recommended shape: **thinking-capable model for the session, local
 non-thinking model for the worker**. It works because both route through
 LiteLLM on the same protocol — see
 [All models route through LiteLLM](#all-models-route-through-litellm).
@@ -271,7 +273,10 @@ long-term knowledge extraction.
 laptop, a 7B worker with `curator.enabled=false` is the sane choice.
 
 **To use a model not listed above**, add it to `config/litellm.yaml` under
-`model_list`, then restart the gateway once (`ai-stack restart`). Example:
+`model_list`, then restart the gateway once (`ai-stack restart` — or
+`docker compose up -d --force-recreate litellm` if you're calling compose
+directly; a plain `up -d` can leave the old container running and the new
+model invisible in `/v1/models`). Example:
 
 ```yaml
 - model_name: qwen2.5-coder:14b
@@ -280,10 +285,12 @@ laptop, a 7B worker with `curator.enabled=false` is the sane choice.
     api_base: http://host.docker.internal:11434
 ```
 
-Then `ai-stack models deepseek-v4-flash qwen2.5-coder:14b`. Any model your IDE
-list shows comes from this file — `curl -s http://localhost:3207/v1/models`.
-Ready-made local block for `qwen2.5-coder:14b` is already commented into
-`config/litellm.yaml`; uncomment it after pulling the model.
+Then `ai-stack models qwen3:8b ministral-3:8b`. Any model your IDE
+list shows comes from this file — `curl -s http://localhost:3207/v1/models`,
+which is the authoritative check that a new entry registered.
+Both local blocks are already in `config/litellm.yaml`: `ministral-3:8b` is
+active, `llama3.1:8b` and `qwen2.5-coder:14b` are commented out. Uncomment the
+one you pulled.
 
 ### Don't point Lore directly at Ollama
 
@@ -404,12 +411,13 @@ and worker model.
 
 ## Models
 
-| Model name          | Backend       | Notes                    |
-| ------------------- | ------------- | ------------------------ |
-| `deepseek-v4-flash` | DeepSeek API  | needs `OPENAI_API_KEY`   |
-| `deepseek-v4-pro`   | DeepSeek API  | needs `OPENAI_API_KEY`   |
-| `qwen3:8b`          | Ollama (host) | **thinking** model       |
-| `qwen2.5-coder:14b` | Ollama (host) | good non-thinking worker |
+| Model name          | Backend       | Notes                             |
+| ------------------- | ------------- | --------------------------------- |
+| `deepseek-v4-flash` | DeepSeek API  | needs `OPENAI_API_KEY`            |
+| `deepseek-v4-pro`   | DeepSeek API  | needs `OPENAI_API_KEY`            |
+| `ministral-3:8b`    | Ollama (host) | **suggested worker** — 256K, fast |
+| `qwen3:8b`          | Ollama (host) | thinking; session use only        |
+| `llama3.1:8b`       | Ollama (host) | alternative worker, 128K          |
 
 ## Architecture
 
