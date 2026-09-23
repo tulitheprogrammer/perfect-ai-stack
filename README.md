@@ -139,6 +139,51 @@ configuration docs for the full schema.
 | `sh bin/ai-stack.sh update`          | Rebuild LiteLLM (with Headroom) + Lore from latest base images          |
 | `sh bin/ai-stack.sh setup-lat [dir]` | Scaffold lat.md + hook in `[dir]` (default: cwd); runs on `start` too   |
 
+## Model selection
+
+You choose which models your session and Lore's background workers use.
+Selection is **per project**, stored in `.lore.json` at your project root, so
+switching models needs no restart and doesn't affect other projects.
+
+```sh
+npx perfect-ai-stack models                              # list + pick interactively
+npx perfect-ai-stack models deepseek-v4-pro llama3.1:8b  # session, worker
+```
+
+That writes `.lore.json`:
+
+```json
+{
+  "model": { "providerID": "openai", "modelID": "deepseek-v4-pro" },
+  "workerModel": { "providerID": "openai", "modelID": "llama3.1:8b" }
+}
+```
+
+- **session** — the model your IDE chat uses.
+- **worker** — distillation, curation, query expansion (background, async).
+- Omitting `workerModel` falls back to the session model, then to
+  `LORE_WORKER_MODEL` (env default `openai/llama3.1:8b`).
+- Existing keys in `.lore.json` (e.g. `knowledge`) are preserved.
+- Both `providerID`s are `openai` because every model here is reached through
+  LiteLLM over the OpenAI protocol. **Line split on provider** — keep them equal.
+
+Pick a cheap local worker: distillation is summarization, and the worker runs
+constantly, so `llama3.1:8b` keeps background spend at zero while your session
+uses a frontier model.
+
+**To use a model not listed above**, add it to `config/litellm.yaml` under
+`model_list`, then restart the gateway once (`ai-stack restart`). Example:
+
+```yaml
+- model_name: gpt-4o-mini
+  litellm_params:
+    model: openai/gpt-4o-mini
+    api_key: os.environ/OPENAI_API_KEY
+```
+
+Then `ai-stack models gpt-4o-mini gpt-4o-mini`. Any model your IDE list shows
+comes from this file — `curl -s http://localhost:3207/v1/models`.
+
 ## One stack, many projects
 
 The stack is cloned **once** — every project you work in uses the same

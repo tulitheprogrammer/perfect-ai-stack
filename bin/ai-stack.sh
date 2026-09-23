@@ -256,6 +256,76 @@ gateway_is_up() {
   curl -sf -o /dev/null --max-time 3 http://localhost:3207/v1/models 2>/dev/null
 }
 
+# List the models available to pick as session/worker.
+available_models() {
+  curl -sf --max-time 5 http://localhost:3207/v1/models 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+
+# Show + set the model selection for THIS project.
+#
+# Selection is per-project, stored in .lore.json (Lore reads workerModel from
+# there), so switching models needs no gateway restart and does not affect
+# other projects. The env LORE_WORKER_MODEL stays the global fallback.
+models() {
+  local target="$PWD"
+  echo "Available models (from the gateway):"
+  local names
+  names="$(available_models)"
+  if [ -z "$names" ]; then
+    echo "  (gateway not reachable — run 'ai-stack start' first)"
+  else
+    echo "$names" | sed 's/^/  - /'
+  fi
+  echo ""
+
+  # Non-interactive: `ai-stack models <session> <worker>` writes the choice.
+  if [ -n "${1:-}" ]; then
+    write_model_choice "$target" "${1}" "${2:-}"
+    return 0
+  fi
+
+  if [ ! -t 0 ]; then
+    echo "  To set models non-interactively:"
+    echo "    ai-stack models <session-model> [worker-model]"
+    return 0
+  fi
+
+  printf "  Session model [deepseek-v4-flash]: "
+  read -r session
+  session="${session:-deepseek-v4-flash}"
+  printf "  Worker model  [llama3.1:8b]: "
+  read -r worker
+  worker="${worker:-llama3.1:8b}"
+  write_model_choice "$target" "$session" "$worker"
+}
+
+# Merge the two model choices into .lore.json without clobbering other keys.
+# Uses node (already a dependency of this package's runtime) instead of jq,
+# which is not installed by default on macOS.
+write_model_choice() {
+  local target="$1" session="$2" worker="$3"
+  local cfg="$target/.lore.json"
+  node -e '
+    const fs = require("fs");
+    const [path, session, worker] = process.argv.slice(1);
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path, "utf8")); } catch {}
+    // providerID/modelID: both are "openai" here because every model in this
+    // stack is reached through LiteLLM over the OpenAI protocol.
+    cfg.model = { providerID: "openai", modelID: session };
+    if (worker) cfg.workerModel = { providerID: "openai", modelID: worker };
+    fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+  ' "$cfg" "$session" "$worker" || { echo "  failed to write $cfg"; return 1; }
+  echo ""
+  echo "  Wrote $cfg:"
+  echo "    session: $session"
+  [ -n "$worker" ] && echo "    worker:  $worker"
+  echo ""
+  echo "  Workers must use the same provider as the session, and any model name"
+  echo "  must exist in config/litellm.yaml — edit that file to add more."
+}
+
 # Start the gateway without exiting on an already-running stack.
 start_stack() {
   export AI_STACK_PROJECT_DIR="${AI_STACK_PROJECT_DIR:-$PWD}"
@@ -401,8 +471,8 @@ case "$CMD" in
     echo "Stack is running. Stop with: ai-stack stop"
     print_client_config
     ;;
-  init|onboard)
-    init
+  models|model)
+    models "${2:-}" "${3:-}"
     ;;
   stop|down)
     cd "$DIR"
@@ -439,6 +509,7 @@ case "$CMD" in
     echo ""
     echo "Commands:"
     echo "  init       Do everything: start gateway + scaffold this project"
+    echo "  models     Show/set the session + worker models for this project"
     echo "  wizard     Interactive setup for API keys"
     echo "  start      Start the gateway (LiteLLM + Headroom + Lore, in Docker)"
     echo "  stop       Stop the gateway"

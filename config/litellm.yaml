@@ -1,4 +1,15 @@
 model_list:
+  # ── Session + worker models ─────────────────────────────────────────────
+  # Any model_name here becomes selectable as a session or worker model.
+  #   session: what your IDE's chat uses (the model you type into the IDE)
+  #   worker:  Lore's background distillation/curation (see LORE_WORKER_MODEL)
+  #
+  # To add a cloud model, copy a block and set the provider prefix:
+  #   openai/gpt-4o        + api_key: os.environ/OPENAI_API_KEY
+  #   anthropic/claude-... + api_key: os.environ/ANTHROPIC_API_KEY
+  # The model must ALSO be listed in LiteLLM's provider, and the worker must
+  # use the same provider as the session (see README, "Model selection").
+  #
   # deepseek-v4-* are local aliases for the DeepSeek API, not names LiteLLM
   # knows, so it can't look up pricing and warns "not in built-in cost map".
   # That warning matters beyond noise: Lore reads cache-read cost to decide when
@@ -27,8 +38,8 @@ model_list:
       cache_read_input_token_cost: 2.8e-8
       cache_creation_input_token_cost: 2.8e-7
 
-  # Lore's background worker model (LORE_WORKER_MODEL default in docker-compose.yml)
-  # Local model: free, so costs stay 0 and the warning is not emitted.
+  # Default worker model: local, free. Good for distillation/curation because
+  # those are summarization tasks, and it keeps background spend at zero.
   - model_name: llama3.1:8b
     litellm_params:
       model: ollama/llama3.1:8b
