@@ -155,7 +155,30 @@ wizard() {
 }
 
 check_deps() {
-  command -v docker >/dev/null 2>&1 || { echo "Missing: docker"; exit 1; }
+  if ! command -v docker >/dev/null 2>&1; then
+    echo ""
+    echo "  Docker isn't installed (or isn't on your PATH)."
+    echo ""
+    echo "  The gateway (LiteLLM + Headroom + Lore) runs in Docker."
+    echo "  Install Docker Desktop:  https://docs.docker.com/get-docker/"
+    echo ""
+    echo "  Already have it open? Make sure the app is running, then retry."
+    echo ""
+    echo "  Don't want Docker at all? Run Lore natively instead:"
+    echo "    npm i -g @loreai/gateway && lore start"
+    echo "  (no Headroom compression; same http://localhost:3207/v1 endpoint)"
+    echo ""
+    exit 1
+  fi
+  # `docker volume`/`compose` need the daemon up; a stopped Docker Desktop is
+  # the most common newbie failure and gives a confusing error deeper in.
+  if ! docker info >/dev/null 2>&1; then
+    echo ""
+    echo "  Docker is installed but the daemon isn't responding."
+    echo "  Start Docker Desktop and wait for it to finish booting, then retry."
+    echo ""
+    exit 1
+  fi
 }
 
 # Install the git pre-commit hook that runs `lat check` on every commit in
@@ -196,7 +219,100 @@ install_lat_hook() {
   fi
 }
 
-# Scaffold lat.md + the pre-commit hook into a TARGET project. One clone of
+# Scaffold + start in one step, for a project that has nothing set up yet.
+# Meant to be run from the project you want to use, and safe to re-run.
+#
+# Idempotent and fast on re-runs: if the gateway is already healthy we skip
+# `docker compose up` entirely, so pointing a second project at the stack does
+# not bounce the containers a first project is mid-session in.
+#
+# Prints the exact IDE config at the end — a newbie's real blocker is not
+# knowing the base URL / model name, so we state them rather than linking docs.
+init() {
+  local target="$PWD"
+  echo "┌─────────────────────────────────────────────┐"
+  echo "│  perfect-ai-stack — project init             │"
+  echo "└─────────────────────────────────────────────┘"
+  echo ""
+  echo "Project: $target"
+  echo ""
+
+  if gateway_is_up; then
+    echo "  Gateway already running — skipping startup."
+  else
+    check_deps
+    # The gateway is shared across projects: start it from the stack dir (docker
+    # compose only reads .env and the compose file from there), then scaffold
+    # the caller's project. Project files never land in the stack dir.
+    ( cd "$DIR" && start_stack )
+  fi
+
+  setup_lat "$target"
+  print_client_config
+}
+
+# Is the gateway already serving? Cheap enough to call before every start.
+gateway_is_up() {
+  curl -sf -o /dev/null --max-time 3 http://localhost:3207/v1/models 2>/dev/null
+}
+
+# Start the gateway without exiting on an already-running stack.
+start_stack() {
+  export AI_STACK_PROJECT_DIR="${AI_STACK_PROJECT_DIR:-$PWD}"
+  DATA_DIR="${AI_STACK_DATA_DIR:-$DIR/data}"
+  mkdir -p "$DATA_DIR/lore" "$DATA_DIR/headroom"
+  # Build only when the images don't exist yet: a rebuild is minutes, which is
+  # too much to pay on every `init`. `ai-stack update` stays the explicit
+  # rebuild path.
+  #
+  # The image prefix is the compose project name, which derives from the stack
+  # directory name unless the compose file pins it — so don't hardcode it.
+  # Ask compose for the images it knows about instead of guessing.
+  if docker compose images -q 2>/dev/null | grep -q .; then
+    echo "Starting the gateway..."
+    docker compose up -d
+  else
+    echo "Building + starting the gateway (first run takes a few minutes)..."
+    docker compose up -d --build
+  fi
+  wait_for_gateway
+}
+
+# `docker compose up -d` returns as soon as containers are *created*, not when
+# LiteLLM is accepting requests. Without this wait, the first IDE request after
+# init races the boot and fails with ECONNREFUSED/502 (Lore -> litellm:4000).
+wait_for_gateway() {
+  local i
+  printf "  Waiting for the gateway to be ready"
+  for i in $(seq 1 60); do
+    if curl -sf -o /dev/null --max-time 3 http://localhost:3207/v1/models 2>/dev/null; then
+      printf " — ready.\n"
+      return 0
+    fi
+    printf "."
+    sleep 2
+  done
+  printf "\n"
+  echo "  Gateway didn't respond within 2 minutes. Check: ai-stack logs"
+  return 1
+}
+
+# The one thing every new user needs and can't guess: what to put in their IDE.
+print_client_config() {
+  echo ""
+  echo "  Point your IDE / coding agent at:"
+  echo ""
+  echo "    Base URL:  http://localhost:3207/v1"
+  echo "    API key:   any non-empty string (auth is off on this local stack)"
+  echo "    Model:     llama3.1:8b        (free, local via Ollama)"
+  echo "               deepseek-v4-flash   (needs OPENAI_API_KEY)"
+  echo ""
+  echo "  Verify it answers:  curl -s http://localhost:3207/v1/models"
+  echo "  Memory dashboard:   http://localhost:3207/ui"
+  echo "  Gateway logs:       ai-stack logs"
+  echo ""
+}
+
 # this package serves every repo:
 #   cd some/project && sh /path/to/perfect-ai-stack/bin/ai-stack.sh setup-lat
 #
@@ -261,8 +377,11 @@ setup_lat() {
 }
 
 case "$CMD" in
-  wizard|setup|config)
+  wizard|config)
     wizard
+    ;;
+  init|onboard)
+    init
     ;;
   start|up)
     check_deps
@@ -273,20 +392,17 @@ case "$CMD" in
     export AI_STACK_PROJECT_DIR="${AI_STACK_PROJECT_DIR:-$PWD}"
     PROJECT_DIR="$AI_STACK_PROJECT_DIR"
     cd "$DIR"
-    # Data dir: override with AI_STACK_DATA_DIR (e.g. when run via npx from a
-    # cache dir); defaults to ./data next to the stack. Project-specific files
-    # (.env, lat.md/, hooks) always go to the project root, not here.
-    DATA_DIR="${AI_STACK_DATA_DIR:-$DIR/data}"
-    mkdir -p "$DATA_DIR/lore" "$DATA_DIR/headroom"
-
-    echo "Building + starting LiteLLM (with Headroom) and Lore (Docker)..."
-    docker compose up -d --build
+    start_stack
     setup_lat "$PROJECT_DIR"
     echo ""
     echo "  LiteLLM -> http://localhost:4000"
     echo "  Lore    -> http://localhost:3207 (dashboard: /ui)"
     echo ""
     echo "Stack is running. Stop with: ai-stack stop"
+    print_client_config
+    ;;
+  init|onboard)
+    init
     ;;
   stop|down)
     cd "$DIR"
@@ -315,15 +431,25 @@ case "$CMD" in
   help|*)
     echo "perfect-ai-stack — AI proxy stack"
     echo ""
+    echo "New here? Run this from your project:"
+    echo ""
+    echo "  npx perfect-ai-stack init"
+    echo ""
+    echo "That starts the gateway, scaffolds lat.md, and prints your IDE config."
+    echo ""
     echo "Commands:"
-    echo "  wizard     Interactive setup for env vars"
-    echo "  start      Build + start LiteLLM (with Headroom) + Lore (Docker)"
-    echo "  stop       Stop both"
-    echo "  restart    Restart both"
+    echo "  init       Do everything: start gateway + scaffold this project"
+    echo "  wizard     Interactive setup for API keys"
+    echo "  start      Start the gateway (LiteLLM + Headroom + Lore, in Docker)"
+    echo "  stop       Stop the gateway"
+    echo "  restart    Restart the gateway"
     echo "  logs       Follow logs (all services; pass a name for one)"
     echo "  ps         Show status"
-    echo "  update     Rebuild LiteLLM (with Headroom) + Lore from latest base images"
-    echo "  setup-lat  Scaffold lat.md + hook in [dir] (default: cwd; runs on start too)"
+    echo "  update     Rebuild from latest base images"
+    echo "  setup-lat  Scaffold lat.md + hook in [dir] (default: cwd)"
+    echo ""
+    echo "  cd some/project && npx perfect-ai-stack init"
+    echo ""
     echo ""
     echo "  sh bin/ai-stack.sh wizard"
     echo "  sh bin/ai-stack.sh start"
