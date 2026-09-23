@@ -43,8 +43,12 @@ model_list:
 
   # ── Local models (Ollama on the host) ───────────────────────────────────
   # Recommended for the WORKER: free per call, and distillation is a
-  # summarization task that 7B-class models handle well.
-  # Pull with: ollama pull <model>
+  # summarization task that small models handle well.
+  #
+  # qwen3:8b is a THINKING model: it emits reasoning before content, so a
+  # short max_tokens returns 200 with empty content, and every worker call
+  # wastes tokens reasoning about a summarization task. Fine as a session
+  # model; prefer a non-thinking model for the worker.
   - model_name: qwen3:8b
     litellm_params:
       model: ollama/qwen3:8b
@@ -55,9 +59,10 @@ model_list:
       cache_read_input_token_cost: 0
       cache_creation_input_token_cost: 0
 
-  # 14B-class local option: better curation quality while still free.
-  # Commented out because it must be pulled first (`ollama pull qwen2.5-coder:14b`)
-  # and a missing model surfaces as a confusing 404 at request time.
+  # Non-thinking local option: better worker default than qwen3:8b, and better
+  # curation quality than 7B. Commented out because it must be pulled first
+  # (`ollama pull qwen2.5-coder:14b`) — a missing model surfaces as a
+  # confusing "Invalid model name" error at request time.
   # - model_name: qwen2.5-coder:14b
   #   litellm_params:
   #     model: ollama/qwen2.5-coder:14b

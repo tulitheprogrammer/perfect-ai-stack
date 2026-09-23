@@ -52,26 +52,74 @@ open -a Docker      # macOS; wait for the whale icon to stop animating
 
 ## Quick start
 
+Three steps, in order. Do them all before touching your IDE.
+
+### 1. Start the gateway
+
 From any existing project:
 
 ```sh
 npx perfect-ai-stack init
 ```
 
-Then point your IDE at the gateway:
+This starts the gateway, scaffolds `lat.md/` + the pre-commit hook in your
+project, and prints the config you'll need in step 3. First run pulls the
+LiteLLM image and builds both containers — allow a few minutes. The first model
+request also downloads Headroom's compression model (~275 MB), cached once in
+`data/headroom/`.
+
+### 2. Pull a local model
+
+The default model is `qwen3:8b`, served by **Ollama on your host** — not inside
+Docker. If Ollama isn't running, or the model isn't pulled, requests fail with
+`Invalid model name passed in model=qwen3:8b` even though the gateway is
+healthy. So:
+
+```sh
+brew install ollama && brew services start ollama   # or: ollama serve
+ollama pull qwen3:8b
+```
+
+Prefer a cloud model instead? Put `OPENAI_API_KEY` in your environment and use
+`deepseek-v4-flash` as the model name. You still need Ollama only if you want a
+local worker (recommended — see [Model selection](#model-selection)).
+
+Verify both halves before continuing:
+
+```sh
+curl -s http://localhost:11434/api/tags   # Ollama up, and qwen3:8b listed
+curl -s http://localhost:3207/v1/models   # gateway up, models listed
+```
+
+### 3. Point your IDE at it
 
 ```
 Base URL:  http://localhost:3207/v1
 API key:   any non-empty string (auth is off on this local stack)
-Model:     <worker_model> (free, local via Ollama)
-           deepseek-v4-flash   (needs OPENAI_API_KEY, or use free ollama model: https://withlore.ai/docs/guides/local-inference/#ollama))
+Model:     qwen3:8b            (free, local via Ollama)
+           deepseek-v4-flash   (needs OPENAI_API_KEY)
 ```
 
 No IDE config to write: the same endpoint works for Zed, Cursor, VS Code
-(Continue/Copilot), and anything else that takes a custom base URL.
+(Continue), and anything else that takes a custom base URL. Send one message to
+confirm, then check the log for `POST /v1/chat/completions ... 200`:
 
-**Already using a tool with built-in memory or context compression?**
-Read [Choosing what to use](#choosing-what-to-use) before pointing it here — for
+```sh
+cd /path/to/perfect-ai-stack && docker compose logs litellm --tail 5
+```
+
+> **Heads up: `qwen3:8b` is a _thinking_ model.** It writes its reasoning first,
+> so on a short `max_tokens` (anything under a few hundred) you get `200 OK`
+> with **empty content** — the budget was spent on reasoning. If a reply comes
+> back blank, raise `max_tokens` in your client, or prefix the message with
+> `/no_think` to skip reasoning. Your IDE's default limit is usually fine.
+
+That's it — you're running. Optional next steps: [choose your models](#model-selection),
+wire up the [knowledge graph over MCP](#knowledge-graph-access-mcp), or read
+[Architecture](#architecture) to see what just happened.
+
+**Already using a tool with built-in memory or context compression?** Read
+[Choosing what to use](#choosing-what-to-use) before pointing it here — for
 Claude Code and Copilot you likely want only part of this stack.
 
 > **Ran Lore on the host before?** Clear the stale env vars first — they
@@ -80,10 +128,6 @@ Claude Code and Copilot you likely want only part of this stack.
 > ```sh
 > unset LORE_UPSTREAM_OPENAI LORE_UPSTREAM_ANTHROPIC LORE_WORKER_UPSTREAM LORE_WORKER_MODEL LORE_WORKER_API_KEY
 > ```
-
-First start pulls the LiteLLM base image and builds both containers — allow a
-few minutes. The first model request also downloads Headroom's compression
-model (~275 MB) once, cached in `data/headroom/`.
 
 ## Choosing what to use
 
@@ -181,14 +225,28 @@ actually chat — distillation after each segment, curation on idle, query
 expansion per recall. Point it at a cloud model and you pay on every session.
 Point it at Ollama and that cost is zero.
 
+**Skip thinking models for the worker.** `qwen3:8b` is the default because it's
+capable, but it reasons before answering, and distillation/curation gain nothing
+from that — so every background call spends tokens on reasoning it throws away.
+A non-thinking local model is cheaper and faster for the same worker output.
+`/no_think` in a prompt is not a fix here, since the worker builds its own
+prompts. (For the _session_ model, thinking is fine — it's you or your IDE
+choosing it.)
+
 ```sh
-ollama pull qwen3:8b                                # 7B: fine for distillation
-npx perfect-ai-stack models deepseek-v4-flash qwen3:8b
+ollama pull qwen2.5-coder:14b                       # non-thinking, good curation
+npx perfect-ai-stack models qwen3:8b qwen2.5-coder:14b
 ```
 
-This is the recommended shape: **frontier model for the session, local model
-for the worker**. It works because both route through LiteLLM on the same
-protocol — see [All models route through LiteLLM](#all-models-route-through-litellm).
+Add the worker to `config/litellm.yaml` first if it isn't listed — the
+`qwen2.5-coder:14b` block is already there, commented out. To stay on
+`qwen3:8b` for both (simplest, one pull), pass it as the worker too and accept
+the extra reasoning tokens.
+
+This is the recommended shape: **capable model for the session, local
+non-thinking model for the worker**. It works because both route through
+LiteLLM on the same protocol — see
+[All models route through LiteLLM](#all-models-route-through-litellm).
 
 **Local quality floors** ([Lore's local-inference guide](https://withlore.ai/docs/guides/local-inference/)):
 
@@ -307,7 +365,7 @@ local single-user stack; don't expose port `4000` beyond your machine.
 | `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000`           |
 | `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000`           |
 | `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000`           |
-| `LORE_WORKER_MODEL`       | Background worker model         | `openai/qwen3:8b`            |
+| `LORE_WORKER_MODEL`       | Background worker model         | `openai/qwen3:8b`               |
 | `LORE_WORKER_API_KEY`     | Key used for worker calls       | `sk-litellm-master` (any works) |
 | `LORE_DEBUG`              | Enable debug logging            | `true`                          |
 
@@ -339,31 +397,19 @@ them only if you want Lore to skip LiteLLM.
 
 ### Ollama-only (no API keys)
 
-Requires Ollama running on the host (`docker-compose` reaches it at
-`host.docker.internal:11434`) with the models you use pulled (`llama3` and
-`qwen3:8b`):
-
-```sh
-brew install ollama && ollama serve
-ollama pull llama3
-ollama pull qwen3:8b
-```
-
-Then:
-
-```sh
-sh bin/ai-stack.sh start
-```
-
-No keys needed — `qwen3:8b` routes through LiteLLM to Ollama on the host.
+No keys are needed for a fully local setup — Ollama runs on your host and
+LiteLLM reaches it at `host.docker.internal:11434`. Setup is
+[Quick start step 2](#2-pull-a-local-model); use `qwen3:8b` as both the session
+and worker model.
 
 ## Models
 
-| Model name          | Backend       |
-| ------------------- | ------------- |
-| `deepseek-v4-flash` | DeepSeek API  |
-| `deepseek-v4-pro`   | DeepSeek API  |
-| `qwen3:8b`       | Ollama (host) |
+| Model name          | Backend       | Notes                    |
+| ------------------- | ------------- | ------------------------ |
+| `deepseek-v4-flash` | DeepSeek API  | needs `OPENAI_API_KEY`   |
+| `deepseek-v4-pro`   | DeepSeek API  | needs `OPENAI_API_KEY`   |
+| `qwen3:8b`          | Ollama (host) | **thinking** model       |
+| `qwen2.5-coder:14b` | Ollama (host) | good non-thinking worker |
 
 ## Architecture
 
