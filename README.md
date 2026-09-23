@@ -153,7 +153,7 @@ switching models needs no restart and doesn't affect other projects.
 
 ```sh
 npx perfect-ai-stack models                              # list + pick interactively
-npx perfect-ai-stack models deepseek-v4-flash qwen3:8b  # session, worker can be either qwen2.5:3b-instruct/qwen2.5:1.5b-instruct/llama3.1:8b - non-thinking by default
+npx perfect-ai-stack models deepseek-v4-flash qwen3:8b  # session, worker can be either qwen2.5:3b-instruct/qwen2.5:1.5b-instruct/qwen3:8b - non-thinking by default
 ```
 
 That writes `.lore.json`:
@@ -168,7 +168,7 @@ That writes `.lore.json`:
 - **session** — the model your IDE chat uses.
 - **worker** — distillation, curation, query expansion (background, async).
 - Omitting `workerModel` falls back to the session model, then to
-  `LORE_WORKER_MODEL` (env default `openai/llama3.1:8b`).
+  `LORE_WORKER_MODEL` (env default `openai/qwen3:8b`).
 - Existing keys in `.lore.json` (e.g. `knowledge`) are preserved.
 - Both `providerID`s are `openai` because every model here is reached through
   LiteLLM over the OpenAI protocol. **Don't split providers** — cross-provider
@@ -307,7 +307,7 @@ local single-user stack; don't expose port `4000` beyond your machine.
 | `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000`           |
 | `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000`           |
 | `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000`           |
-| `LORE_WORKER_MODEL`       | Background worker model         | `openai/llama3.1:8b`            |
+| `LORE_WORKER_MODEL`       | Background worker model         | `openai/qwen3:8b`            |
 | `LORE_WORKER_API_KEY`     | Key used for worker calls       | `sk-litellm-master` (any works) |
 | `LORE_DEBUG`              | Enable debug logging            | `true`                          |
 
@@ -327,7 +327,7 @@ worker speaks a protocol LiteLLM's `/v1/chat/completions` route won't answer.
 **Workers must use the same provider as the session** — cross-provider worker
 calls fail (wrong credentials, wrong API format). They _may_ use a different
 model and a different real backend: `deepseek-v4-flash` (DeepSeek) for the
-session and `llama3.1:8b` (Ollama) for the worker is fine, because both are
+session and `qwen3:8b` (Ollama) for the worker is fine, because both are
 `openai` provider and both route through LiteLLM. Override the URL the worker
 calls with `LORE_WORKER_UPSTREAM`.
 
@@ -341,12 +341,12 @@ them only if you want Lore to skip LiteLLM.
 
 Requires Ollama running on the host (`docker-compose` reaches it at
 `host.docker.internal:11434`) with the models you use pulled (`llama3` and
-`llama3.1:8b`):
+`qwen3:8b`):
 
 ```sh
 brew install ollama && ollama serve
 ollama pull llama3
-ollama pull llama3.1:8b
+ollama pull qwen3:8b
 ```
 
 Then:
@@ -355,7 +355,7 @@ Then:
 sh bin/ai-stack.sh start
 ```
 
-No keys needed — `llama3.1:8b` routes through LiteLLM to Ollama on the host.
+No keys needed — `qwen3:8b` routes through LiteLLM to Ollama on the host.
 
 ## Models
 
@@ -363,7 +363,7 @@ No keys needed — `llama3.1:8b` routes through LiteLLM to Ollama on the host.
 | ------------------- | ------------- |
 | `deepseek-v4-flash` | DeepSeek API  |
 | `deepseek-v4-pro`   | DeepSeek API  |
-| `llama3.1:8b`       | Ollama (host) |
+| `qwen3:8b`       | Ollama (host) |
 
 ## Architecture
 
@@ -385,7 +385,7 @@ flowchart TB
     end
 
     subgraph host["Host machine — not Docker"]
-        OLL["Ollama :11434\nllama3.1:8b"]
+        OLL["Ollama :11434\nqwen3:8b"]
     end
 
     DS["DeepSeek API"]
@@ -498,7 +498,7 @@ export OPENAI_BASE_URL=http://localhost:3207/v1      # OpenAI-compatible clients
 ```
 
 Use a model name from the Models table above (e.g. `deepseek-v4-flash` for
-DeepSeek, or `llama3.1:8b` for Ollama). Zed, Cursor, VS Code
+DeepSeek, or `qwen3:8b` for Ollama). Zed, Cursor, VS Code
 Copilot, Claude Code — anything that accepts a custom base URL — works the
 same way. These are guidelines, not repo-committed IDE config: adapt to
 whatever editor your team uses.
@@ -617,8 +617,8 @@ compression. LiteLLM then maps the model name to the real provider via
 
 The **worker** takes a separate path: `LORE_WORKER_MODEL` splits on `/` into
 `provider/model`, and the provider ID selects the protocol. Write the `openai`
-provider explicitly. The default `openai/llama3.1:8b` speaks the OpenAI
-protocol, so the worker sends plain `llama3.1:8b` to LiteLLM (→ Ollama), exactly
+provider explicitly. The default `openai/qwen3:8b` speaks the OpenAI
+protocol, so the worker sends plain `qwen3:8b` to LiteLLM (→ Ollama), exactly
 like the session model sends `deepseek-v4-flash` (→ DeepSeek). Session and worker
 can therefore use different real backends (DeepSeek + Ollama) as long as both use
 the `openai` provider through LiteLLM — that same-provider constraint is why a

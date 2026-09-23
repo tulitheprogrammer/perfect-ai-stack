@@ -53,7 +53,7 @@ services:
       # so worker calls reach LiteLLM instead of the Anthropic protocol.
       # Workers MUST use the same provider as the session: cross-provider
       # worker calls fail (wrong credentials / wrong API format).
-      - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-openai/llama3.1:8b}
+      - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-openai/qwen3:8b}
       # Worker -> LiteLLM calls use a dedicated key (any key works: auth is off)
       - LORE_WORKER_API_KEY=${LITELLM_MASTER_KEY:-sk-litellm-master}
       - LORE_DEBUG=${LORE_DEBUG:-true}

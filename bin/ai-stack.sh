@@ -296,9 +296,9 @@ models() {
   session="${session:-deepseek-v4-flash}"
   echo "  Worker runs on every session (distillation/curation) — prefer a LOCAL"
   echo "  model to keep that free. 7B is fine for distillation; 32B+ for curation."
-  printf "  Worker model  [llama3.1:8b]: "
+  printf "  Worker model  [qwen3:8b]: "
   read -r worker
-  worker="${worker:-llama3.1:8b}"
+  worker="${worker:-qwen3:8b}"
   write_model_choice "$target" "$session" "$worker"
 }
 
@@ -378,7 +378,7 @@ print_client_config() {
   echo ""
   echo "    Base URL:  http://localhost:3207/v1"
   echo "    API key:   any non-empty string (auth is off on this local stack)"
-  echo "    Model:     llama3.1:8b        (free, local via Ollama)"
+  echo "    Model:     qwen3:8b        (free, local via Ollama)"
   echo "               deepseek-v4-flash   (needs OPENAI_API_KEY)"
   echo ""
   echo "  Verify it answers:  curl -s http://localhost:3207/v1/models"
