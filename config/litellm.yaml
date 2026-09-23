@@ -20,10 +20,10 @@ model_list:
   # With cache costs at 0 that heuristic always thinks cache is free. The values
   # below fill in cache pricing; they are the DeepSeek V3.2-style split (cache
   # read ~10x cheaper than a fresh input token). Update if your provider differs.
-  - model_name: deepseek-v4-flash
+  - model_name: deepseek-flash
     litellm_params:
-      model: deepseek/deepseek-v4-flash
-      api_key: os.environ/OPENAI_API_KEY
+      model: deepseek/deepseek-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
     model_info:
       # USD per token. Placeholders only if you don't care about cost tracking.
       input_cost_per_token: 2.8e-7
@@ -34,7 +34,7 @@ model_list:
   - model_name: deepseek-v4-pro
     litellm_params:
       model: deepseek/deepseek-v4-pro
-      api_key: os.environ/OPENAI_API_KEY
+      api_key: os.environ/DEEPSEEK_API_KEY
     model_info:
       input_cost_per_token: 2.8e-7
       output_cost_per_token: 4.2e-7

@@ -11,7 +11,12 @@ services:
       - ${AI_STACK_DATA_DIR:-./data}/headroom:/data/headroom
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # config/litellm.yaml reads the DeepSeek key as DEEPSEEK_API_KEY (the name
+      # LiteLLM's own deepseek/ provider expects). OPENAI_API_KEY is the older
+      # name from when this stack was OpenAI-first, so each falls back to the
+      # other: either export keeps working, nothing needs re-exporting.
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-${OPENAI_API_KEY}}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-${DEEPSEEK_API_KEY}}
       # No LITELLM_MASTER_KEY: Lore forwards the client's key, and with auth
       # disabled any key is accepted without a key database (local single-user
       # stack).
@@ -34,6 +39,11 @@ services:
     working_dir: /app
     ports:
       - "3207:3207"
+    # Docker's default /dev/shm is 64MB. The embedding model runs on ONNX; when
+    # the native runtime can't load it, the gateway falls back to the bundled
+    # threaded-WASM runtime, which needs shared memory and dies under 64MB —
+    # leaving recall on FTS-only. 1GB removes that failure mode.
+    shm_size: "1gb"
     volumes:
       # Lore's memory (SQLite DB + embeddings) — host-side, survives teardown
       - ${AI_STACK_DATA_DIR:-./data}/lore:/root/.local/share/lore
@@ -41,6 +51,11 @@ services:
       # exports land in that repo (set AI_STACK_PROJECT_DIR under npx; defaults
       # to the stack dir so clones behave like before)
       - ${AI_STACK_PROJECT_DIR:-.}:/app
+      # The embedding model (~137MB int8 ONNX) is downloaded on first use into
+      # the gateway's .cache. Keeping that on the host means a recreate (or
+      # `update`) reuses it instead of re-downloading, and a truncated download
+      # caused by a killed container can't poison the image layer.
+      - ${AI_STACK_DATA_DIR:-./data}/lore-cache:/usr/local/lib/node_modules/@loreai/gateway/.cache
     environment:
       # Bare roots, no trailing /v1: Lore appends the API path itself
       # (gateway builds `${upstreamAnthropic}/v1/models`), so a /v1 suffix
