@@ -294,6 +294,8 @@ models() {
   printf "  Session model [deepseek-v4-flash]: "
   read -r session
   session="${session:-deepseek-v4-flash}"
+  echo "  Worker runs on every session (distillation/curation) — prefer a LOCAL"
+  echo "  model to keep that free. 7B is fine for distillation; 32B+ for curation."
   printf "  Worker model  [llama3.1:8b]: "
   read -r worker
   worker="${worker:-llama3.1:8b}"
@@ -324,6 +326,8 @@ write_model_choice() {
   echo ""
   echo "  Workers must use the same provider as the session, and any model name"
   echo "  must exist in config/litellm.yaml — edit that file to add more."
+  echo "  Prefer a LOCAL worker model: it runs every session, so a cloud worker"
+  echo "  bills on every session. See README \"Make the worker a local model\"."
 }
 
 # Start the gateway without exiting on an already-running stack.

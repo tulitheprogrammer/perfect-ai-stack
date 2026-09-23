@@ -165,24 +165,61 @@ That writes `.lore.json`:
   `LORE_WORKER_MODEL` (env default `openai/llama3.1:8b`).
 - Existing keys in `.lore.json` (e.g. `knowledge`) are preserved.
 - Both `providerID`s are `openai` because every model here is reached through
-  LiteLLM over the OpenAI protocol. **Line split on provider** — keep them equal.
+  LiteLLM over the OpenAI protocol. **Don't split providers** — cross-provider
+  worker calls fail (wrong credentials, wrong API format).
 
-Pick a cheap local worker: distillation is summarization, and the worker runs
-constantly, so `llama3.1:8b` keeps background spend at zero while your session
-uses a frontier model.
+### Make the worker a local model
+
+The worker runs on **every session**, in the background, whether or not you
+actually chat — distillation after each segment, curation on idle, query
+expansion per recall. Point it at a cloud model and you pay on every session.
+Point it at Ollama and that cost is zero.
+
+```sh
+ollama pull llama3.1:8b                                # 7B: fine for distillation
+npx perfect-ai-stack models deepseek-v4-flash llama3.1:8b
+```
+
+This is the recommended shape: **frontier model for the session, local model
+for the worker**. It works because both route through LiteLLM on the same
+protocol — see [All models route through LiteLLM](#all-models-route-through-litellm).
+
+**Local quality floors** ([Lore's local-inference guide](https://withlore.ai/docs/guides/local-inference/)):
+
+| Pipeline            | Local model        | Notes                                                                      |
+| ------------------- | ------------------ | -------------------------------------------------------------------------- |
+| **Distillation**    | 7B-class, Q4/Q5    | Fine. Produces usable observation logs, even code-heavy                    |
+| **Query expansion** | 7B-class           | Fine — it only rephrases recall queries                                    |
+| **Curation**        | **32B+ preferred** | 7B yields duplicates, wrong categories, low-confidence facts in `.lore.md` |
+
+If your local model is too small for curation, **turn curation off** rather
+than accept bad `.lore.md` entries — everything else keeps working:
+
+```json
+{ "curator": { "enabled": false } }
+```
+
+That's the honest tradeoff for a small local worker: you keep distillation,
+recall, context management, and `lat.md` indexing, and lose automatic
+long-term knowledge extraction.
+
+**Watch the memory cost.** A 32B model needs real RAM; if you only have a
+laptop, a 7B worker with `curator.enabled=false` is the sane choice.
 
 **To use a model not listed above**, add it to `config/litellm.yaml` under
 `model_list`, then restart the gateway once (`ai-stack restart`). Example:
 
 ```yaml
-- model_name: gpt-4o-mini
+- model_name: qwen2.5-coder:14b
   litellm_params:
-    model: openai/gpt-4o-mini
-    api_key: os.environ/OPENAI_API_KEY
+    model: ollama/qwen2.5-coder:14b
+    api_base: http://host.docker.internal:11434
 ```
 
-Then `ai-stack models gpt-4o-mini gpt-4o-mini`. Any model your IDE list shows
-comes from this file — `curl -s http://localhost:3207/v1/models`.
+Then `ai-stack models deepseek-v4-flash qwen2.5-coder:14b`. Any model your IDE
+list shows comes from this file — `curl -s http://localhost:3207/v1/models`.
+Ready-made local block for `qwen2.5-coder:14b` is already commented into
+`config/litellm.yaml`; uncomment it after pulling the model.
 
 ## One stack, many projects
 

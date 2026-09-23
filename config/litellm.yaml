@@ -2,13 +2,16 @@ model_list:
   # ── Session + worker models ─────────────────────────────────────────────
   # Any model_name here becomes selectable as a session or worker model.
   #   session: what your IDE's chat uses (the model you type into the IDE)
-  #   worker:  Lore's background distillation/curation (see LORE_WORKER_MODEL)
+  #   worker:  Lore's background distillation/curation (see `ai-stack models`)
+  #
+  # Put your WORKER on a local model. The worker runs on every session
+  # (distillation, curation, query expansion) so a cloud worker bills on every
+  # session whether or not you chat. A local worker keeps that at zero. See
+  # README "Model selection" for the quality floor per pipeline.
   #
   # To add a cloud model, copy a block and set the provider prefix:
   #   openai/gpt-4o        + api_key: os.environ/OPENAI_API_KEY
   #   anthropic/claude-... + api_key: os.environ/ANTHROPIC_API_KEY
-  # The model must ALSO be listed in LiteLLM's provider, and the worker must
-  # use the same provider as the session (see README, "Model selection").
   #
   # deepseek-v4-* are local aliases for the DeepSeek API, not names LiteLLM
   # knows, so it can't look up pricing and warns "not in built-in cost map".
@@ -38,8 +41,10 @@ model_list:
       cache_read_input_token_cost: 2.8e-8
       cache_creation_input_token_cost: 2.8e-7
 
-  # Default worker model: local, free. Good for distillation/curation because
-  # those are summarization tasks, and it keeps background spend at zero.
+  # ── Local models (Ollama on the host) ───────────────────────────────────
+  # Recommended for the WORKER: free per call, and distillation is a
+  # summarization task that 7B-class models handle well.
+  # Pull with: ollama pull <model>
   - model_name: llama3.1:8b
     litellm_params:
       model: ollama/llama3.1:8b
@@ -49,6 +54,19 @@ model_list:
       output_cost_per_token: 0
       cache_read_input_token_cost: 0
       cache_creation_input_token_cost: 0
+
+  # 14B-class local option: better curation quality while still free.
+  # Commented out because it must be pulled first (`ollama pull qwen2.5-coder:14b`)
+  # and a missing model surfaces as a confusing 404 at request time.
+  # - model_name: qwen2.5-coder:14b
+  #   litellm_params:
+  #     model: ollama/qwen2.5-coder:14b
+  #     api_base: http://host.docker.internal:11434
+  #   model_info:
+  #     input_cost_per_token: 0
+  #     output_cost_per_token: 0
+  #     cache_read_input_token_cost: 0
+  #     cache_creation_input_token_cost: 0
 
 # Headroom compression is registered in litellm/entrypoint.py (see litellm/Dockerfile)
 # — LiteLLM's YAML dotted-path callbacks register the class, not an instance,
