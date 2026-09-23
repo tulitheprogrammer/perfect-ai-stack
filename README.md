@@ -62,10 +62,11 @@ From any existing project:
 npx perfect-ai-stack init
 ```
 
-This starts the gateway, scaffolds `lat.md/` + the pre-commit hook in your
-project, and prints the config you'll need in step 3. First run pulls the
-LiteLLM image and builds both containers — allow a few minutes. The first model
-request also downloads Headroom's compression model (~275 MB), cached once in
+This starts the gateway, asks for your session + worker models (press Enter for
+the defaults), scaffolds `lat.md/` + the pre-commit hook in your project, and
+prints the config you'll need in step 3. First run pulls the LiteLLM image and
+builds both containers — allow a few minutes. The first model request also
+downloads Headroom's compression model (~275 MB), cached once in
 `data/headroom/`.
 
 ### 2. Pull a local model
@@ -211,12 +212,33 @@ That writes `.lore.json`:
 
 - **session** — the model your IDE chat uses.
 - **worker** — distillation, curation, query expansion (background, async).
+- **curator** — **off by default.** Curation writes durable entries into
+  `.lore.md`, which is committed and PR-reviewed; opting in means you or a
+  reviewer vet what the agent recorded. Turn it on with:
+
+  ```json
+  { "curator": { "enabled": true } }
+  ```
+
+  Opt in when you want automatic extraction of decisions and preferences that
+  `lat.md` cannot hold (it describes code structure; the curator captures
+  session facts). It needs a capable model — see the measured table below.
+
 - Omitting `workerModel` falls back to the session model, then to
   `LORE_WORKER_MODEL` (env default `openai/qwen3:8b`).
-- Existing keys in `.lore.json` (e.g. `knowledge`) are preserved.
+- Existing keys in `.lore.json` (e.g. `knowledge`) are preserved, and an
+  explicit `curator` setting is never overwritten by a re-run.
 - Both `providerID`s are `openai` because every model here is reached through
   LiteLLM over the OpenAI protocol. **Don't split providers** — cross-provider
   worker calls fail (wrong credentials, wrong API format).
+
+### Onboarding picks these for you
+
+`init` asks for the session and worker model as part of setup, so a new
+project starts on the measured-best local pair with the curator off. Press
+Enter to accept the defaults, or name any model the gateway serves. Running
+non-interactively (npx in a script, CI) skips the prompt and writes the
+defaults rather than hanging.
 
 ### Make the worker a local model
 
@@ -325,19 +347,20 @@ the kind of thing `lat.md` holds better anyway.
 | **Query expansion** | 7B-class           | Fine — it only rephrases recall queries                                    |
 | **Curation**        | **32B+ preferred** | 7B yields duplicates, wrong categories, low-confidence facts in `.lore.md` |
 
-If your local model is too small for curation, **turn curation off** rather
-than accept bad `.lore.md` entries — everything else keeps working:
+**When to opt in to curation.** These floors are why it ships off:
 
-```json
-{ "curator": { "enabled": false } }
-```
+| Your worker model                  | Curation                                                       |
+| ---------------------------------- | -------------------------------------------------------------- |
+| 8B-class local (default)           | ❌ Leave it off — under the floor; one tested 8B misclassified |
+| 32B+ local, or a cheap cloud model | ✅ Opt in — clears the documented floor                        |
 
-That's the honest tradeoff for a small local worker: you keep distillation,
-recall, context management, and `lat.md` indexing, and lose automatic
-long-term knowledge extraction.
+With curation off you keep distillation, recall, gradient context management,
+and `lat.md` indexing; you lose automatic `.lore.md` extraction. That is the
+intended default for an 8B local worker, not a degraded mode.
 
-**Watch the memory cost.** A 32B model needs real RAM; if you only have a
-laptop, a 7B worker with `curator.enabled=false` is the sane choice.
+If you have the RAM for 32B, or want to point the worker at a cheap cloud model
+for curation only, opt in and check the output with
+`sh scripts/eval-worker.sh`.
 
 **To use a model not listed above**, add it to `config/litellm.yaml` under
 `model_list`, then restart the gateway once (`ai-stack restart` — or

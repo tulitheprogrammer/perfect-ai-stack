@@ -226,8 +226,12 @@ install_lat_hook() {
 # `docker compose up` entirely, so pointing a second project at the stack does
 # not bounce the containers a first project is mid-session in.
 #
-# Prints the exact IDE config at the end — a newbie's real blocker is not
-# knowing the base URL / model name, so we state them rather than linking docs.
+# Flow: start gateway -> pick models -> scaffold lat.md -> print IDE config.
+# Model choice comes before scaffolding so the written .lore.json is in place
+# before any session can run with the wrong worker.
+#
+# Non-interactive runs (npx in a script, CI) skip the prompts and write the
+# defaults, so `init` never hangs waiting for input.
 init() {
   local target="$PWD"
   echo "┌─────────────────────────────────────────────┐"
@@ -247,8 +251,33 @@ init() {
     ( cd "$DIR" && start_stack )
   fi
 
+  choose_models "$target"
   setup_lat "$target"
   print_client_config
+}
+
+# Pick the session + worker models during onboarding, and set the curator
+# default. Writes .lore.json (merging, so a re-run keeps other keys).
+#
+# Non-interactive: keep whatever .lore.json already says, else write defaults.
+choose_models() {
+  local target="$1"
+  local cfg="$target/.lore.json"
+
+  if [ ! -t 0 ]; then
+    if [ -f "$cfg" ]; then
+      echo "  Models: keeping existing .lore.json"
+    else
+      echo "  Models: defaults (qwen3:8b session + worker, curator off)"
+      write_model_choice "$target" "qwen3:8b" "qwen3:8b"
+    fi
+    return 0
+  fi
+
+  echo "  Models — press Enter to accept the defaults."
+  echo "  Defaults are the measured-best local pair and cost nothing to run."
+  echo ""
+  models "" ""
 }
 
 # Is the gateway already serving? Cheap enough to call before every start.
@@ -291,11 +320,11 @@ models() {
     return 0
   fi
 
-  printf "  Session model [deepseek-v4-flash]: "
+  printf "  Session model [qwen3:8b]: "
   read -r session
-  session="${session:-deepseek-v4-flash}"
-  echo "  Worker runs on every session (distillation/curation) — prefer a LOCAL"
-  echo "  model to keep that free. 7B is fine for distillation; 32B+ for curation."
+  session="${session:-qwen3:8b}"
+  echo "  Worker runs on every session (distillation/curation) — keep it LOCAL and"
+  echo "  free. qwen3:8b is the measured-best local model (curation eval)."
   printf "  Worker model  [qwen3:8b]: "
   read -r worker
   worker="${worker:-qwen3:8b}"
@@ -317,12 +346,18 @@ write_model_choice() {
     // stack is reached through LiteLLM over the OpenAI protocol.
     cfg.model = { providerID: "openai", modelID: session };
     if (worker) cfg.workerModel = { providerID: "openai", modelID: worker };
+    // Curator off by default. Curation writes durable entries into .lore.md,
+    // which is committed and PR-reviewed; an 8B local model misclassifies
+    // them (measured), and lat.md already carries the architecture knowledge.
+    // Only set it on first write so an explicit opt-in is never overridden.
+    if (!cfg.curator) cfg.curator = { enabled: false };
     fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
   ' "$cfg" "$session" "$worker" || { echo "  failed to write $cfg"; return 1; }
   echo ""
   echo "  Wrote $cfg:"
   echo "    session: $session"
   [ -n "$worker" ] && echo "    worker:  $worker"
+  echo "    curator: off (opt in with {\"curator\": {\"enabled\": true}})"
   echo ""
   echo "  Workers must use the same provider as the session, and any model name"
   echo "  must exist in config/litellm.yaml — edit that file to add more."
