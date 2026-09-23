@@ -9,81 +9,135 @@ Zed -> Lore (:3207) -> LiteLLM + Headroom (:4000) -> DeepSeek / Anthropic / Open
 
 ## Install
 
-The stack is published on npm and runs anywhere without cloning:
+One command, from your project:
 
 ```sh
-# Run the wizard from any project (writes .env in that project)
-npx perfect-ai-stack wizard
-
-# Start the stack (builds Docker images, scaffolds lat.md, installs hooks)
-npx perfect-ai-stack start
+cd ~/code/your-project
+npx perfect-ai-stack init
 ```
 
+`init` starts the gateway, scaffolds `lat.md/` + the pre-commit hook, and
+prints the IDE config to use. Safe to re-run; if the gateway is already up it
+skips startup instead of restarting it. Requires Docker Desktop (see
+[Prerequisites](#prerequisites)).
+
 `npx` installs the package into npm's cache and runs `bin/ai-stack.sh` from
-there. Project-specific files (`.env`, `lat.md/`, git hooks) are always
-created in the project you run it in. The Lore memory DB and Headroom model
-cache default to `./data` next to the stack, and `.lore.md` exports target
-the current directory — set both when running under npx so they land
-somewhere stable and in your project:
+there. Project files (`.env`, `lat.md/`, git hooks) always land in the project
+you run it from. Keep the memory DB and Headroom cache out of the npx cache dir
+so they survive upgrades:
 
 ```sh
 export AI_STACK_DATA_DIR=~/.ai-stack      # Lore DB + Headroom cache (shared across projects)
-export AI_STACK_PROJECT_DIR="$PWD"         # where .lore.md exports land (your repo)
 ```
 
-If you prefer to clone instead, see [Quick start](#quick-start).
+Working on the stack itself? Clone it and see
+[Development](#development) — `sh bin/ai-stack.sh init` behaves identically.
 
 ## Prerequisites
 
-- Docker Desktop (running):
+**Docker Desktop, installed and running.** That's the only requirement — no
+API keys needed to try it (local models run through Ollama).
 
-  ```sh
-  open -a Docker
-  # wait for the whale icon in the menu bar to stop animating
-  ```
+```sh
+open -a Docker      # macOS; wait for the whale icon to stop animating
+```
 
-- Docker + Docker Compose (v2)
-- API keys in environment (see below)
+`init` checks this and tells you exactly what's missing if it isn't there.
 
 ## Quick start
 
-> **If you previously ran Lore on the host**, clear the old env vars first —
-> stale `LORE_UPSTREAM_OPENAI` / `LORE_UPSTREAM_ANTHROPIC` /
-> `LORE_WORKER_UPSTREAM` (`http://localhost:8787/v1`) override the compose
-> defaults and point inside the container at nothing. Also remove them from
-> your shell profile.
+From any existing project:
+
+```sh
+npx perfect-ai-stack init
+```
+
+Then point your IDE at the gateway:
+
+```
+Base URL:  http://localhost:3207/v1
+API key:   any non-empty string (auth is off on this local stack)
+Model:     llama3.1:8b        (free, local via Ollama)
+           deepseek-v4-flash   (needs OPENAI_API_KEY)
+```
+
+No IDE config to write: the same endpoint works for Zed, Cursor, VS Code
+(Continue/Copilot), and anything else that takes a custom base URL.
+
+**Already use a tool with built-in memory or context compression?** Read
+[Choosing what to use](#choosing-what-to-use) before pointing it here — for
+Claude Code and Copilot you likely want only part of this stack.
+
+> **Ran Lore on the host before?** Clear the stale env vars first — they
+> override the compose defaults and point inside the container at nothing.
 >
 > ```sh
 > unset LORE_UPSTREAM_OPENAI LORE_UPSTREAM_ANTHROPIC LORE_WORKER_UPSTREAM LORE_WORKER_MODEL LORE_WORKER_API_KEY
 > ```
 
-```sh
-git clone git@github.com:tulitheprogrammer/perfect-ai-stack.git
-cd perfect-ai-stack
-
-# Interactive setup
-sh bin/ai-stack.sh wizard
-
-# Start the stack (also scaffolds lat.md + installs the pre-commit hook)
-sh bin/ai-stack.sh start
-```
-
 First start pulls the LiteLLM base image and builds both containers — allow a
 few minutes. The first model request also downloads Headroom's compression
 model (~275 MB) once, cached in `data/headroom/`.
 
+## Choosing what to use
+
+Some clients already ship memory and context compression. Pointing this stack
+at them can duplicate work or fight the built-in behaviour, so pick per tool:
+
+| Your client                              | Already has                                            | Use from this stack     | Why                                                                                                             |
+| ---------------------------------------- | ------------------------------------------------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Claude Code**                          | Auto-compaction, `CLAUDE.md` memory                    | ✅ `lat.md` + hook only | Skip Lore — it's also an Anthropic-protocol proxy and its distillation overlaps compaction                      |
+| **GitHub Copilot** (VS Code / JetBrains) | Repo-aware indexing; **BYOK base URL is very limited** | ⚠️ `lat.md` + hook only | Copilot generally can't take a custom `OPENAI_BASE_URL`; point Continue at the gateway instead if you want Lore |
+| **Cursor**                               | Built-in codebase index + rules                        | ✅ Full stack           | Its index is code-retrieval, not decision/error memory — no overlap with Lore                                   |
+| **Zed**                                  | Nothing built-in                                       | ✅ Full stack           | The reference client                                                                                            |
+| **Continue / Cline / Aider**             | Nothing built-in                                       | ✅ Full stack           | Plain BYOK OpenAI clients                                                                                       |
+| **OpenCode / Pi**                        | Nothing built-in                                       | ✅ Full stack           | `lore run` auto-configures these natively                                                                       |
+
+Rule of thumb: **`lat.md` never conflicts** — it's a plain markdown knowledge
+graph, and Lore indexes it automatically when present. The parts worth being
+selective about are **Lore** (memory) and **Headroom** (token compression),
+both of which overlap what Claude Code and Copilot already do natively.
+
+### Add only the knowledge graph (no Docker)
+
+If you want the `lat.md` workflow without the gateway:
+
+```sh
+npm i -g lat.md
+cd your-project && lat init          # creates lat.md/, wires agents
+lat check                            # also runs on commit once init adds the hook
+```
+
+### Use the gateway with a tool that has its own memory
+
+Point the tool at `http://localhost:3207/v1` as usual, then disable the
+overlapping halves in `.lore.json` at your project root:
+
+```json
+{
+  // Keep context management + recall, drop the long-term knowledge base
+  "knowledge": { "enabled": false }
+}
+```
+
+Set `"knowledge": { "enabled": false }` when your tool manages its own
+persistent facts; Lore then still handles distillation, recall, and the
+context window, without maintaining a second set of facts. See Lore's own
+configuration docs for the full schema.
+
 ## Commands
 
-| Command                              | What it does                                                          |
-| ------------------------------------ | --------------------------------------------------------------------- |
-| `npx perfect-ai-stack <cmd>`         | Same as `sh bin/ai-stack.sh <cmd>` — run from any project             |
-| `sh bin/ai-stack.sh wizard`          | Interactive setup for env vars                                        |
-| `sh bin/ai-stack.sh start`           | Build + start LiteLLM + Lore (Docker); scaffold lat.md + hook         |
-| `sh bin/ai-stack.sh stop`            | Stop both                                                             |
-| `sh bin/ai-stack.sh logs`            | Follow logs (all services)                                            |
-| `sh bin/ai-stack.sh ps`              | Show status                                                           |
-| `sh bin/ai-stack.sh update`          | Rebuild LiteLLM (with Headroom) + Lore from latest base images        |
-| `sh bin/ai-stack.sh setup-lat [dir]` | Scaffold lat.md + hook in `[dir]` (default: cwd); runs on `start` too |
+| Command                              | What it does                                                            |
+| ------------------------------------ | ----------------------------------------------------------------------- |
+| `npx perfect-ai-stack <cmd>`         | Same as `sh bin/ai-stack.sh <cmd>` — run from any project               |
+| `sh bin/ai-stack.sh init`            | **Start here.** Start gateway + scaffold this project + show IDE config |
+| `sh bin/ai-stack.sh wizard`          | Interactive setup for env vars (only for cloud models)                  |
+| `sh bin/ai-stack.sh start`           | Start the gateway only; also scaffolds lat.md + hook                    |
+| `sh bin/ai-stack.sh stop`            | Stop the gateway                                                        |
+| `sh bin/ai-stack.sh logs`            | Follow logs (all services)                                              |
+| `sh bin/ai-stack.sh ps`              | Show status                                                             |
+| `sh bin/ai-stack.sh update`          | Rebuild LiteLLM (with Headroom) + Lore from latest base images          |
+| `sh bin/ai-stack.sh setup-lat [dir]` | Scaffold lat.md + hook in `[dir]` (default: cwd); runs on `start` too   |
 
 ## One stack, many projects
 

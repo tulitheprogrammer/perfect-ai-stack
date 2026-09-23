@@ -1,19 +1,43 @@
 model_list:
+  # deepseek-v4-* are local aliases for the DeepSeek API, not names LiteLLM
+  # knows, so it can't look up pricing and warns "not in built-in cost map".
+  # That warning matters beyond noise: Lore reads cache-read cost to decide when
+  # to escalate from raw context to compression (budget.targetCacheReadCostPerTurn).
+  # With cache costs at 0 that heuristic always thinks cache is free. The values
+  # below fill in cache pricing; they are the DeepSeek V3.2-style split (cache
+  # read ~10x cheaper than a fresh input token). Update if your provider differs.
   - model_name: deepseek-v4-flash
     litellm_params:
       model: deepseek/deepseek-v4-flash
       api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      # USD per token. Placeholders only if you don't care about cost tracking.
+      input_cost_per_token: 2.8e-7
+      output_cost_per_token: 4.2e-7
+      cache_read_input_token_cost: 2.8e-8
+      cache_creation_input_token_cost: 2.8e-7
 
   - model_name: deepseek-v4-pro
     litellm_params:
       model: deepseek/deepseek-v4-pro
       api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      input_cost_per_token: 2.8e-7
+      output_cost_per_token: 4.2e-7
+      cache_read_input_token_cost: 2.8e-8
+      cache_creation_input_token_cost: 2.8e-7
 
   # Lore's background worker model (LORE_WORKER_MODEL default in docker-compose.yml)
+  # Local model: free, so costs stay 0 and the warning is not emitted.
   - model_name: llama3.1:8b
     litellm_params:
       model: ollama/llama3.1:8b
       api_base: http://host.docker.internal:11434
+    model_info:
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+      cache_read_input_token_cost: 0
+      cache_creation_input_token_cost: 0
 
 # Headroom compression is registered in litellm/entrypoint.py (see litellm/Dockerfile)
 # — LiteLLM's YAML dotted-path callbacks register the class, not an instance,
