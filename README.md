@@ -228,36 +228,41 @@ Point it at Ollama and that cost is zero.
 **Thinking models cost more per worker call, but don't hurt quality.** `qwen3:8b`
 emits reasoning before content, so a short `max_tokens` returns 200 with empty
 content, and every background call spends tokens reasoning about a
-summarization task. That is a **token-cost** issue, not an accuracy one — on the
-eval below it still produced clean, correctly-categorised entries with no
-duplicates. Prefer a non-thinking model to keep the cost down; `/no_think` is
-not a fix, since the worker builds its own prompts.
+summarization task. That is a **token-cost** issue, not an accuracy one —
+measured below, it produced correct categories with no duplicates. `/no_think`
+is not a fix, since the worker builds its own prompts.
 
-### Compare models on the real task
+### Which local model to use (measured)
+
+Lore's docs put the curation floor at 32B+. We tested the 8B candidates on the
+real task anyway — specs alone don't predict this, and the result was not what
+parameter counts suggest:
 
 ```sh
-ollama pull ministral-3:8b    # non-thinking, 256K context, ~6GB
-npx perfect-ai-stack models qwen3:8b ministral-3:8b
+ollama pull qwen3:8b
+npx perfect-ai-stack models qwen3:8b qwen3:8b     # session + worker
 ```
 
-**Why `ministral-3:8b` over `llama3.1:8b`:** both are non-thinking 8B-class and
-both work. Ministral has **256K context vs 128K** (so distillation segments and
-the curator's entry context get split or truncated less often) and is a year
-newer. Llama 3.1 is the conservative pick if you want ~1GB less disk (4.9GB vs
-6.0GB) and the most battle-tested option. Add whichever you choose to
-`config/litellm.yaml` first — both blocks are pre-written, one active and one
-commented.
+| Model            | Categories correct | Duplicates | Verdict          |
+| ---------------- | ------------------ | ---------- | ---------------- |
+| `qwen3:8b`       | **4/4**            | 0          | ✅ use this      |
+| `ministral-3:8b` | 2/4                | 0          | ❌ misclassifies |
 
-This is the recommended shape: **thinking-capable model for the session, local
-non-thinking model for the worker**. It works because both route through
-LiteLLM on the same protocol — see
-[All models route through LiteLLM](#all-models-route-through-litellm).
+`ministral-3:8b` systematically labelled "switching from npm to pnpm" a
+**gotcha** instead of a decision/preference, and dropped the `preference`
+category entirely — identically across three runs, so it is a real flaw rather
+than sampling noise. A wrong category in a committed `.lore.md` is exactly the
+review burden Lore warns about.
 
-### Compare models on the real task
+`qwen3:8b` classified all four facts correctly and kept the reason ("duplicate
+lockfiles") in the content. Its cost is thinking tokens, which are local and
+free.
 
-Curation quality is not predictable from parameter count, so measure it. This
-sends one fixed conversation (containing 5 known durable facts) to each model
-through the gateway and prints the raw output plus a format check:
+### Compare models yourself
+
+Quality is not predictable from parameter count, so measure it before choosing.
+This sends one fixed conversation (5 known durable facts) to each model through
+the gateway and prints the raw output plus a format check:
 
 ```sh
 sh scripts/eval-worker.sh                 # every local model the gateway serves
@@ -266,8 +271,12 @@ sh scripts/eval-worker.sh qwen3:8b         # or specific models
 
 Read-only — it does not write `.lore.md` or touch the database. What to look
 for: valid JSON, correct categories, no duplicate titles, and no invented
-facts. Duplicates are the documented small-model failure mode; hallucinated
-entries are worse than missing ones, since `.lore.md` is committed and reviewed.
+facts. A wrong category is the failure to watch for most closely: it is the one
+that silently corrupts a committed file while looking perfectly well-formed.
+
+This is the recommended shape: **thinking-capable model for the session, local
+model for the worker**. It works because both route through LiteLLM on the same
+protocol — see [All models route through LiteLLM](#all-models-route-through-litellm).
 
 A real run's output (model `qwen3:8b`, reformatted from one line):
 
@@ -469,13 +478,13 @@ and worker model.
 
 ## Models
 
-| Model name          | Backend       | Notes                             |
-| ------------------- | ------------- | --------------------------------- |
-| `deepseek-v4-flash` | DeepSeek API  | needs `OPENAI_API_KEY`            |
-| `deepseek-v4-pro`   | DeepSeek API  | needs `OPENAI_API_KEY`            |
-| `ministral-3:8b`    | Ollama (host) | **suggested worker** — 256K, fast |
-| `qwen3:8b`          | Ollama (host) | thinking; session use only        |
-| `llama3.1:8b`       | Ollama (host) | alternative worker, 128K          |
+| Model name          | Backend       | Notes                                |
+| ------------------- | ------------- | ------------------------------------ |
+| `deepseek-v4-flash` | DeepSeek API  | needs `OPENAI_API_KEY`               |
+| `deepseek-v4-pro`   | DeepSeek API  | needs `OPENAI_API_KEY`               |
+| `qwen3:8b`          | Ollama (host) | **worker + session** — measured best |
+| `ministral-3:8b`    | Ollama (host) | measured: misclassifies              |
+| `llama3.1:8b`       | Ollama (host) | untested alternative, 128K           |
 
 ## Architecture
 

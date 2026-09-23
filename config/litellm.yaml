@@ -42,16 +42,28 @@ model_list:
       cache_creation_input_token_cost: 2.8e-7
 
   # ── Local models (Ollama on the host) ───────────────────────────────────
-  # Recommended for the WORKER: free per call, and distillation is a
-  # summarization task that small models handle well.
+  # Measured on the curation eval (scripts/eval-worker.sh) — see README.
   #
-  # Ministral 3 8B Instruct is the suggested worker: non-thinking (so no
-  # reasoning tokens burnt on a summarization task), 256K context (double
-  # Llama 3.1 8B, so distillation segments and the curator's entry context get
-  # split less often), and newer. Pull it with:
-  #   ollama pull ministral-3:8b-instruct-2512-q4_K_M
-  # Any tag of the family works; `ministral-3:8b` is the same weights at Q4.
-  # Pair with {"curator": {"enabled": false}} — see README on quality floors.
+  # qwen3:8b classified all four test facts correctly across three runs, with
+  # no duplicate titles. It is a THINKING model, so a short max_tokens returns
+  # 200 with empty content and every worker call spends tokens on reasoning —
+  # but that is local token cost, not a quality problem. Used for both session
+  # and worker by default.
+  - model_name: qwen3:8b
+    litellm_params:
+      model: ollama/qwen3:8b
+      api_base: http://host.docker.internal:11434
+    model_info:
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+      cache_read_input_token_cost: 0
+      cache_creation_input_token_cost: 0
+
+  # Non-thinking, 256K context — better specs on paper, but it systematically
+  # labelled a preference as a "gotcha" and dropped the preference category
+  # entirely, identically across three runs. Wrong categories in a committed
+  # .lore.md are a review burden, so this is not the default. Kept as an option
+  # for anyone who wants the larger context window as the session model.
   - model_name: ministral-3:8b
     litellm_params:
       model: ollama/ministral-3:8b
@@ -62,11 +74,8 @@ model_list:
       cache_read_input_token_cost: 0
       cache_creation_input_token_cost: 0
 
-  # Conservative alternative: older, smaller on disk (4.9GB vs 6.0GB) and
-  # battle-tested, but half the context (128K) and no advantage otherwise.
-  # Commented out because it must be pulled first
-  # (`ollama pull llama3.1:8b`) — a missing model surfaces as a confusing
-  # "Invalid model name" error at request time.
+  # Untested alternative: non-thinking, 128K context, smaller on disk (4.9GB),
+  # most battle-tested. Run scripts/eval-worker.sh before adopting it.
   # - model_name: llama3.1:8b
   #   litellm_params:
   #     model: ollama/llama3.1:8b
@@ -76,20 +85,6 @@ model_list:
   #     output_cost_per_token: 0
   #     cache_read_input_token_cost: 0
   #     cache_creation_input_token_cost: 0
-
-  # qwen3:8b is a THINKING model: it emits reasoning before content, so a
-  # short max_tokens returns 200 with empty content, and every worker call
-  # wastes tokens reasoning about a summarization task. Usable as a session
-  # model; not a good worker. Kept because it is a common local default.
-  - model_name: qwen3:8b
-    litellm_params:
-      model: ollama/qwen3:8b
-      api_base: http://host.docker.internal:11434
-    model_info:
-      input_cost_per_token: 0
-      output_cost_per_token: 0
-      cache_read_input_token_cost: 0
-      cache_creation_input_token_cost: 0
 
   # Best local curation quality if you have the RAM (14B-class). Still local
   # and free. Uncomment after `ollama pull qwen2.5-coder:14b`.
