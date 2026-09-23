@@ -4,6 +4,25 @@ FROM node:24-slim
 # release's bundled layout.
 RUN npm install -g @loreai/gateway@0.40.0
 
+# Lore's local embedding provider (search.embeddings.provider: "local", the
+# default) requires '@huggingface/transformers' at runtime, but the gateway
+# package does not declare or install it — without it, recall silently degrades
+# to FTS-only search on every project:
+#   LocalProviderUnavailableError: '@huggingface/transformers' failed to
+#   initialize. Recall will use FTS-only search.
+#
+# Installed globally next to the gateway so Node resolves it from the gateway's
+# own directory. It bundles its own onnxruntime-node (with linux/arm64
+# binaries) and the all-MiniLM-style embedder, so no extra native setup is
+# needed. This must NOT be trimmed: the local provider is what keeps recall
+# working offline and without an API key.
+#
+# Note: @loreai/onnxruntime-linux-arm64 (Lore's optional native fast path)
+# SIGSEGVs on Apple Silicon hosts — 'Unknown CPU vendor: 0' — but that is a
+# non-issue once this package is present, since transformers uses its own
+# onnxruntime-node instead.
+RUN npm install -g @huggingface/transformers@4.3.0
+
 # ponytail: lore's gateway hardcodes a model-prefix -> provider route table
 # (claude-*/gpt-*/deepseek-*/... -> api.anthropic.com / api.openai.com / ...)
 # that wins over LORE_UPSTREAM_* and sends session traffic past LiteLLM (and
