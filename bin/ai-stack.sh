@@ -64,7 +64,15 @@ wizard() {
   # `|| true` on purpose: check_var returns 1 for an unset var, and under
   # `set -e` a bare call would exit the wizard before showing the menu.
   check_var "ANTHROPIC_API_KEY" "Only if using Claude (chat model)" || true
-  check_var "OPENAI_API_KEY" "Only if using DeepSeek/GPT-4o" || true
+  # DeepSeek reads DEEPSEEK_API_KEY first, then falls back to the older
+  # OPENAI_API_KEY name (docker-compose.yml sets both). Warn only if neither is
+  # set, otherwise a legacy-only export would look missing and get written to
+  # .env under a name the model doesn't prefer.
+  if [ -z "$DEEPSEEK_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
+    check_var "DEEPSEEK_API_KEY" "Only if using DeepSeek (chat model)" || true
+  else
+    echo "  DEEPSEEK_API_KEY is set${DEEPSEEK_API_KEY:+}"
+  fi
 
   echo ""
   if [ -z "$MISSING" ]; then
@@ -144,7 +152,7 @@ wizard() {
   }
 
   prompt_var "ANTHROPIC_API_KEY" "Only if using Claude (chat model)" ""
-  prompt_var "OPENAI_API_KEY" "Only if using DeepSeek/GPT-4o" ""
+  prompt_var "DEEPSEEK_API_KEY" "Only if using DeepSeek (chat model)" "$OPENAI_API_KEY"
 
   echo ""
   if [ "$CHOICE" != "1" ]; then
@@ -179,6 +187,71 @@ check_deps() {
     echo ""
     exit 1
   fi
+}
+
+# Install a GitHub Actions workflow that runs `lat check` on push/PR.
+#
+# Complements the pre-commit hook: the hook is local and bypassable
+# (`--no-verify`), and never runs on pull requests. `lat check` is the same
+# command in both places, so CI failures here are exactly what a committer
+# would have seen locally.
+#
+# Skips silently when the target is not a GitHub repo, or when a workflow
+# mentioning `lat check` already exists (so a user's own tuned workflow is
+# never clobbered).
+install_lat_workflow() {
+  local target="$1"
+  [ -d "$target/.git" ] || return 0
+
+  # GitHub only? A remote pointing anywhere else means this file is dead weight.
+  if ! git -C "$target" remote -v 2>/dev/null | grep -q 'github\.com'; then
+    return 0
+  fi
+
+  local dir="$target/.github/workflows"
+  local file="$dir/lat.yml"
+
+  if [ -f "$file" ]; then
+    return 0
+  fi
+  # Any existing workflow that already validates lat — leave it alone.
+  if [ -d "$dir" ] && grep -rqsl 'lat check' "$dir" 2>/dev/null; then
+    echo "  lat CI: existing workflow already runs 'lat check'"
+    return 0
+  fi
+
+  mkdir -p "$dir" || return 0
+  cat > "$file" <<'YAML'
+# Validates the lat.md knowledge graph on every push and PR.
+#
+# The local pre-commit hook only guards `git commit`; it can be skipped with
+# --no-verify and does not run for PRs from forks. This is the enforcement
+# that cannot be bypassed.
+name: lat
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned loosely on purpose: `lat check` is the contract, and the graph
+      # format is stable across 0.x. Re-run this workflow after a major bump if
+      # validation output changes shape.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install -g lat.md
+      - run: lat check
+YAML
+  echo "  lat CI: added .github/workflows/lat.yml"
 }
 
 # Install the git pre-commit hook that runs `lat check` on every commit in
@@ -245,6 +318,12 @@ init() {
     echo "  Gateway already running — skipping startup."
   else
     check_deps
+    # Capture the project dir BEFORE cd-ing to the stack dir: start_stack reads
+    # $PWD to set AI_STACK_PROJECT_DIR, which becomes the :/app mount. Without
+    # this, the cd below wins and the stack dir mounts instead — so Lore finds
+    # no .lore.json, falls back to its hardcoded anthropic/claude-sonnet-4-6
+    # worker model, and every worker call 400s. `start` exports it the same way.
+    export AI_STACK_PROJECT_DIR="${AI_STACK_PROJECT_DIR:-$target}"
     # The gateway is shared across projects: start it from the stack dir (docker
     # compose only reads .env and the compose file from there), then scaffold
     # the caller's project. Project files never land in the stack dir.
@@ -882,7 +961,7 @@ print_client_config() {
   echo "    API key:   any non-empty string (auth is off on this local stack)"
   echo "    Model:     $s"
   case "$s" in
-    deepseek*) echo "               (remote — needs OPENAI_API_KEY in your environment)" ;;
+    deepseek*) echo "               (remote — needs DEEPSEEK_API_KEY in your environment)" ;;
     *)         echo "               (local via Ollama)" ;;
   esac
   echo ""
@@ -948,7 +1027,23 @@ setup_lat() {
     echo "  .gitignore: created with lat entries"
   fi
 
-  # 5. Verify — soft during start (docs are a quality gate, not a runtime
+  # 5. GitHub Actions workflow — enforces `lat check` in CI.
+  #
+  # The pre-commit hook only guards local `git commit`; it is bypassable with
+  # `--no-verify` and never runs on PRs from forks. This closes that gap.
+  #
+  # Uses the CLI (`npm i -g lat.md`) rather than vercel-labs/lat.md@action-v1:
+  # the published Action tags do not exist yet (`git/matching-refs/tags/action`
+  # is empty), so a workflow referencing one fails immediately on a missing ref.
+  # Upgrade path: once an action-vX.Y.Z tag is released, switch to
+  # `uses: vercel-labs/lat.md@action-vX.Y.Z` and drop the Node/npm steps.
+  #
+  # Only written when the target is a git repo with a GitHub remote — dropping
+  # .github/workflows/ into a non-GitHub project is noise. Never overwrites an
+  # existing lat workflow.
+  install_lat_workflow "$target"
+
+  # 6. Verify — soft during start (docs are a quality gate, not a runtime
   #    gate), strict on explicit `ai-stack setup-lat`.
   if (cd "$target" && lat check >/dev/null 2>&1); then
     echo "  lat check: OK"

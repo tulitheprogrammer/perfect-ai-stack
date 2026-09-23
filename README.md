@@ -81,8 +81,8 @@ brew install ollama && brew services start ollama   # or: ollama serve
 ollama pull qwen3:8b
 ```
 
-Prefer a cloud model instead? Put `OPENAI_API_KEY` in your environment and use
-`deepseek-v4-flash` as the model name. You still need Ollama only if you want a
+Prefer a cloud model instead? Put `DEEPSEEK_API_KEY` in your environment and use
+`deepseek-flash` as the model name. You still need Ollama only if you want a
 local worker (recommended — see [Model selection](#model-selection)).
 
 Verify both halves before continuing:
@@ -98,7 +98,7 @@ curl -s http://localhost:3207/v1/models   # gateway up, models listed
 Base URL:  http://localhost:3207/v1
 API key:   any non-empty string (auth is off on this local stack)
 Model:     qwen3:8b            (free, local via Ollama)
-           deepseek-v4-flash   (needs OPENAI_API_KEY)
+           deepseek-flash   (needs DEEPSEEK_API_KEY)
 ```
 
 No IDE config to write: the same endpoint works for Zed, Cursor, VS Code
@@ -276,7 +276,7 @@ the available list rather than written.
 
 ```
   Available models (served by the gateway AND usable now):
-    deepseek-v4-flash        remote
+    deepseek-flash        remote
     deepseek-v4-pro          remote
     qwen3:8b                 local   thinking: more tokens per call
     ministral-3:8b           local
@@ -289,7 +289,7 @@ because the worker runs on every session — distillation, curation and query
 expansion — whether or not you chat, so a remote worker meters continuously:
 
 ```
-  ⚠ 'deepseek-v4-flash' is a REMOTE model and you have chosen it as the WORKER.
+  ⚠ 'deepseek-flash' is a REMOTE model and you have chosen it as the WORKER.
 
     The worker runs on EVERY session ... A remote worker bills continuously,
     so this turns a free local stack into a metered one.
@@ -550,9 +550,13 @@ indirection; see `.env.example.md`).
 Either export them in your shell profile (`~/.zshrc`, `~/.bashrc`):
 
 ```sh
-export OPENAI_API_KEY="sk-..."
+export DEEPSEEK_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+
+(`DEEPSEEK_API_KEY` is the canonical name; the older `OPENAI_API_KEY` still
+works and is used as a fallback if `DEEPSEEK_API_KEY` is unset. Setting both is
+fine — `DEEPSEEK_API_KEY` wins.)
 
 or write them to a repo-local `.env` file (auto-loaded by Docker Compose,
 gitignored). A template with every supported variable (zero secrets) is
@@ -560,7 +564,7 @@ committed as [`.env.example.md`](.env.example.md) — copy it to `.env` and
 adjust. The wizard (`ai-stack.sh wizard`) can generate this for you too:
 
 ```sh
-OPENAI_API_KEY=sk-...
+DEEPSEEK_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
@@ -570,10 +574,14 @@ want it (see the stale-env warning in Quick start).
 
 ### LiteLLM
 
-| Variable            | Purpose           | Default              |
-| ------------------- | ----------------- | -------------------- |
-| `ANTHROPIC_API_KEY` | Claude 3.5 Sonnet | only if using Claude |
-| `OPENAI_API_KEY`    | DeepSeek / GPT-4o | only if using cloud  |
+| Variable            | Purpose                | Default                               |
+| ------------------- | ---------------------- | ------------------------------------- |
+| `ANTHROPIC_API_KEY` | Claude 3.5 Sonnet      | only if using Claude                  |
+| `DEEPSEEK_API_KEY`  | DeepSeek (canonical)   | only if using cloud                   |
+| `OPENAI_API_KEY`    | Legacy alias for above | falls back to/from `DEEPSEEK_API_KEY` |
+
+`docker-compose.yml` sets both names, each falling back to the other, so
+exporting either one works — `DEEPSEEK_API_KEY` wins when both are set.
 
 No `LITELLM_MASTER_KEY` is set: LiteLLM runs **auth-disabled** (accepts any
 key) so Lore's forwarded client keys work without a key database. This is a
@@ -605,7 +613,7 @@ worker speaks a protocol LiteLLM's `/v1/chat/completions` route won't answer.
 
 **Workers must use the same provider as the session** — cross-provider worker
 calls fail (wrong credentials, wrong API format). They _may_ use a different
-model and a different real backend: `deepseek-v4-flash` (DeepSeek) for the
+model and a different real backend: `deepseek-flash` (DeepSeek) for the
 session and `qwen3:8b` (Ollama) for the worker is fine, because both are
 `openai` provider and both route through LiteLLM. Override the URL the worker
 calls with `LORE_WORKER_UPSTREAM`.
@@ -623,15 +631,15 @@ LiteLLM reaches it at `host.docker.internal:11434`. Setup is
 [Quick start step 2](#2-pull-a-local-model); use `qwen3:8b` as both the session
 and worker model.
 
-## Models
+## Optional Models
 
-| Model name          | Backend       | Notes                                |
-| ------------------- | ------------- | ------------------------------------ |
-| `deepseek-v4-flash` | DeepSeek API  | needs `OPENAI_API_KEY`               |
-| `deepseek-v4-pro`   | DeepSeek API  | needs `OPENAI_API_KEY`               |
-| `qwen3:8b`          | Ollama (host) | **worker + session** — measured best |
-| `ministral-3:8b`    | Ollama (host) | measured: misclassifies              |
-| `llama3.1:8b`       | Ollama (host) | untested alternative, 128K           |
+| Model name        | Backend       | Notes                                     | Role    |
+| ----------------- | ------------- | ----------------------------------------- | ------- |
+| `deepseek-flash`  | DeepSeek API  | needs `DEEPSEEK_API_KEY`                  | session |
+| `deepseek-v4-pro` | DeepSeek API  | needs `DEEPSEEK_API_KEY`/`OPENAI_API_KEY` | session |
+| `ministral-3:8b`  | Ollama (host) | measured: misclassifies                   | worker  |
+| `qwen3:8b`        | Ollama (host) | **worker + session** — measured best      | worker  |
+| `llama3.1:8b`     | Ollama (host) | untested alternative, 128K                | worker  |
 
 ## Architecture
 
@@ -765,7 +773,7 @@ export OPENAI_BASE_URL=http://localhost:3207/v1      # OpenAI-compatible clients
 # export ANTHROPIC_BASE_URL=http://localhost:3207     # Anthropic-protocol clients
 ```
 
-Use a model name from the Models table above (e.g. `deepseek-v4-flash` for
+Use a model name from the Models table above (e.g. `deepseek-flash` for
 DeepSeek, or `qwen3:8b` for Ollama). Zed, Cursor, VS Code
 Copilot, Claude Code — anything that accepts a custom base URL — works the
 same way. These are guidelines, not repo-committed IDE config: adapt to
@@ -808,20 +816,38 @@ lat reindex                 # rebuild the embedding index (lat.md/.cache/, gitig
 ```
 
 `lat init` (which the setup runs) is interactive — it asks which coding agents
-you use and wires up hooks/MCP/skills for them. It therefore only runs when
-stdin is a terminal; an unattended `start` prints a hint to run
-`ai-stack setup-lat` manually instead. Semantic search works offline out of
-the box (bundled local embedding model) — no key needed.
+you use and wires up hooks/MCP/skills for them. It still creates a valid
+`lat.md/` when stdin is not a terminal, so an unattended `start` leaves the
+project with a graph; re-run `lat init` interactively afterwards to pick
+agents/hooks/MCP. Semantic search works offline out of the box (bundled local
+embedding model) — no key needed.
 
-**Enforcement:** `setup-lat` installs a git pre-commit hook (`.git/hooks/
-pre-commit`) that runs `lat check`. A commit that changes a `// @lat:` anchor
-without updating the graph fails — docs can't drift silently, for human edits
-as well as agent edits. The install is idempotent: an existing hook that
-already runs `lat check` is left alone, and one without it gets `lat check`
-appended.
+**Enforcement:** two layers, installed by `setup-lat` (and by `init`/`start`).
+
+1. **Git pre-commit hook** (`.git/hooks/pre-commit`) runs `lat check`. A commit
+   that changes a `// @lat:` anchor without updating the graph fails — docs
+   can't drift silently, for human edits as well as agent edits. The install is
+   idempotent: an existing hook that already runs `lat check` is left alone, and
+   one without it gets `lat check` appended.
+2. **GitHub Actions workflow** (`.github/workflows/lat.yml`) runs the same
+   `lat check` on every push and PR. The hook alone is not enough: it is local
+   (never runs for a contributor who doesn't have it), bypassable with
+   `--no-verify`, and does not run for pull requests from forks.
+
+   The workflow installs the `lat` CLI rather than using
+   `vercel-labs/lat.md@action-v1` from the upstream docs — **no `action-*` tag
+   has been published yet**, so a workflow referencing one fails immediately on
+   a missing ref. Once a release exists, switch to
+   `uses: vercel-labs/lat.md@action-vX.Y.Z` and drop the Node/npm steps.
+
+   It is only written when the target is a git repo with a **GitHub** remote,
+   and never overwrites an existing workflow that already runs `lat check`.
 
 The knowledge base itself (`lat.md/lat.md`) is meant to be committed; only the
-generated embedding index (`lat.md/.cache/`) is gitignored.
+generated embedding index (`lat.md/.cache/`, one SQLite file) is gitignored,
+along with `lat.md/node_modules/`. The CLI's own config lives outside the repo
+(`~/Library/Application Support/lat/config.json` on macOS,
+`lat config` prints the path) and needs no ignore entry.
 
 ## Headroom
 
@@ -887,7 +913,7 @@ The **worker** takes a separate path: `LORE_WORKER_MODEL` splits on `/` into
 `provider/model`, and the provider ID selects the protocol. Write the `openai`
 provider explicitly. The default `openai/qwen3:8b` speaks the OpenAI
 protocol, so the worker sends plain `qwen3:8b` to LiteLLM (→ Ollama), exactly
-like the session model sends `deepseek-v4-flash` (→ DeepSeek). Session and worker
+like the session model sends `deepseek-flash` (→ DeepSeek). Session and worker
 can therefore use different real backends (DeepSeek + Ollama) as long as both use
 the `openai` provider through LiteLLM — that same-provider constraint is why a
 cross-provider worker pairing fails with wrong credentials / wrong API format.
