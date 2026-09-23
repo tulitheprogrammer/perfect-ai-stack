@@ -670,7 +670,7 @@ show_models_help() {
   ai-stack models — choose the session and worker models for this project
 
     ai-stack models                        show current selection
-    ai-stack models <session> [worker]     set them (e.g. qwen3:8b llama3.1:8b)
+    ai-stack models <session> [worker]     set them (e.g. qwen3:8b ministral-3:8b)
     ai-stack models --curator on           opt in to curation (.lore.md export)
     ai-stack models --curator off          opt out (the default)
     ai-stack models --reset                restore the defaults

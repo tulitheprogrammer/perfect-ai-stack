@@ -198,7 +198,7 @@ switching models needs no restart and doesn't affect other projects.
 
 ```sh
 npx perfect-ai-stack models                              # list + pick interactively
-npx perfect-ai-stack models qwen3:8b ministral-3:8b     # session, then worker
+npx perfect-ai-stack models qwen3:8b ministral-3:8b   # session, then worker
 ```
 
 That writes `.lore.json`:
@@ -238,11 +238,11 @@ Per project, stored in `.lore.json`, and effective immediately — no gateway
 restart, no effect on your other projects:
 
 ```sh
-npx perfect-ai-stack models                          # show current + change
-npx perfect-ai-stack models qwen3:8b llama3.1:8b     # set session + worker
-npx perfect-ai-stack models --curator on             # opt in to curation
-npx perfect-ai-stack models --curator off            # opt out (default)
-npx perfect-ai-stack models --reset                  # back to the defaults
+npx perfect-ai-stack models                           # show current + change
+npx perfect-ai-stack models qwen3:8b ministral-3:8b   # session + worker
+npx perfect-ai-stack models --curator on              # opt in to curation
+npx perfect-ai-stack models --curator off             # opt out (default)
+npx perfect-ai-stack models --reset                   # back to the defaults
 npx perfect-ai-stack models --help
 ```
 
@@ -270,7 +270,7 @@ to typed entry automatically, so scripted use is unchanged.
 gateway serves (so LiteLLM knows its provider, key and pricing) and what is
 actually reachable now — a local model that is configured but not pulled is
 filtered out, because choosing it fails at request time. Each entry is labelled
-`local` or `cloud`, which matters for the worker: cloud models bill on every
+`local` or `remote`, which matters for the worker: remote models bill on every
 session. Passing an unusable name to `models <session> [worker]` is rejected with
 the available list rather than written.
 
@@ -502,9 +502,9 @@ model invisible in `/v1/models`). Example:
 Then `ai-stack models qwen3:8b ministral-3:8b`. Any model your IDE
 list shows comes from this file — `curl -s http://localhost:3207/v1/models`,
 which is the authoritative check that a new entry registered.
-Both local blocks are already in `config/litellm.yaml`: `ministral-3:8b` is
-active, `llama3.1:8b` and `qwen2.5-coder:14b` are commented out. Uncomment the
-one you pulled.
+Both local blocks are already in `config/litellm.yaml`: `qwen3:8b` (the
+default) and `ministral-3:8b` are active; `llama3.1:8b` and `qwen2.5-coder:14b`
+are commented out. Uncomment the one you pulled.
 
 ### Don't point Lore directly at Ollama
 

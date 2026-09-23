@@ -1,0 +1,9 @@
+{
+  "model": {
+    "providerID": "openai",
+    "modelID": "qwen3:8b"
+  },
+  "curator": {
+    "enabled": false
+  }
+}
