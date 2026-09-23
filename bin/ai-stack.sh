@@ -291,8 +291,8 @@ gateway_is_up() {
 # fails at request time with a confusing "model not found" — so it is not
 # "available", and must not be offered as a choice.
 #
-# Prints `name<TAB>local|cloud`. Anything Ollama has a tag for is local; the
-# rest are cloud providers reached through LiteLLM.
+# Prints `name<TAB>local|remote`. Anything Ollama has a tag for is local; the
+# rest are remote providers reached through LiteLLM.
 available_models() {
   local served pulled
   served="$(curl -sf --max-time 5 http://localhost:3207/v1/models 2>/dev/null \
@@ -301,10 +301,10 @@ available_models() {
     | tr ',' '\n' | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' || true)"
   [ -n "$served" ] || return 0
 
-  # Any served name that is not pulled is unusable UNLESS it is a cloud model.
-  # Cloud models never appear in the Ollama list, and local names always carry
+  # Any served name that is not pulled is unusable UNLESS it is a remote model.
+  # Remote models never appear in the Ollama list, and local names always carry
   # a tag, so a served name matching no pulled tag AND containing ':' is a
-  # local tag that is missing; without ':' it is a cloud model.
+  # local tag that is missing; without ':' it is a remote model.
   local m
   printf '%s\n' "$served" | while IFS= read -r m; do
     [ -n "$m" ] || continue
@@ -313,7 +313,7 @@ available_models() {
     elif printf '%s\n' "$m" | grep -q ':'; then
       : # local-style tag, not pulled -> unusable, skip
     else
-      printf '%s\tcloud\n' "$m"
+      printf '%s\tremote\n' "$m"
     fi
   done
 }
@@ -366,6 +366,13 @@ model_notes() {
 models() {
   local target="$PWD"
   local cfg="$target/.lore.json"
+
+  # `--yes` skips the remote-worker confirmation, for scripted use.
+  local yes=""
+  if [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ]; then
+    yes="1"
+    shift
+  fi
 
   case "${1:-}" in
     --reset)
@@ -435,6 +442,7 @@ models() {
       return 1
     fi
     check_same_protocol "$want_s" "${want_w:-$want_s}" || return 1
+    confirm_remote_worker "$want_w" "$yes" || return 1
     write_model_choice "$target" "$want_s" "$want_w"
     echo ""
     show_model_state "$cfg"
@@ -463,9 +471,55 @@ models() {
   prompt_available_model "  Worker model " "$cur_w" && worker="$REPLY" || return 1
 
   check_same_protocol "$session" "$worker" || return 1
+  confirm_remote_worker "$worker" "" || return 1
   write_model_choice "$target" "$session" "$worker"
   echo ""
   show_model_state "$cfg"
+}
+
+# Is this model local (Ollama on this machine) or remote (a cloud provider)?
+model_is_local() {
+  available_models | awk -F'\t' -v m="$1" '$1 == m && $2 == "local" { found=1 } END { exit !found }'
+}
+
+# Warn hard when a REMOTE model is chosen as the worker.
+#
+# The worker runs on every session (distillation, curation, query expansion)
+# whether or not you chat, so a remote worker bills continuously — it is the
+# single easiest way to turn a free local stack into a metered one by accident.
+# $2 non-empty means --yes was passed (scripted), which proceeds.
+confirm_remote_worker() {
+  local w="$1" skip="$2"
+  [ -n "$w" ] || return 0
+  model_is_local "$w" && return 0
+
+  echo ""
+  echo "  ⚠ '$w' is a REMOTE model and you have chosen it as the WORKER."
+  echo ""
+  echo "    The worker runs on EVERY session — distillation, curation and query"
+  echo "    expansion — whether or not you actually chat. A remote worker bills"
+  echo "    continuously, so this turns a free local stack into a metered one."
+  echo ""
+  echo "    Remote is the right choice when your local model cannot curate well:"
+  echo "    Lore's floor is 32B+ for reliable curation, and a cheap cloud model"
+  echo "    (Haiku-class) is often better than a small local one."
+  echo "    Otherwise pick a local worker — see 'ai-stack models' for the list."
+  echo ""
+
+  [ -n "$skip" ] && return 0
+  if [ ! -t 0 ]; then
+    echo "  Refusing in a non-interactive shell (a remote worker should be a"
+    echo "  deliberate choice). To accept it, put --yes first:"
+    echo "    ai-stack models --yes <session-model> $w"
+    return 1
+  fi
+  printf "  Use a remote worker anyway? [y/N]: "
+  local go
+  read -r go
+  case "$go" in
+    [Yy]*) return 0 ;;
+    *) echo "  Cancelled — nothing changed."; return 1 ;;
+  esac
 }
 
 # Just the names, one per line.
@@ -521,9 +575,14 @@ show_models_help() {
     ai-stack models --curator on           opt in to curation (.lore.md export)
     ai-stack models --curator off          opt out (the default)
     ai-stack models --reset                restore the defaults
+    ai-stack models --yes <session> [w]    skip the remote-worker confirmation
 
   Stored in .lore.json at your project root, so it is per-project and needs no
   gateway restart. Re-run anytime; the environment default is unaffected.
+
+  Models are labelled local (Ollama on this machine, free) or remote (a cloud
+  provider that bills per token). Choosing a REMOTE WORKER asks for
+  confirmation: the worker runs every session, so it meters continuously.
 
   A model name must exist in config/litellm.yaml. To add a new one, append a
   model_list entry there and run `ai-stack restart` once.
@@ -543,6 +602,12 @@ show_model_state() {
   echo "    session: ${s:-qwen3:8b (env default)}${note:+   ($note)}"
   note="$(model_notes "$w")"
   echo "    worker:  ${w:-$s (follows session)}${note:+   ($note)}"
+  # Keep the cost of a remote worker visible after the fact: it bills on every
+  # session, and nothing else in the output distinguishes it from a free one.
+  if [ -n "$w" ] && ! model_is_local "$w"; then
+    echo "    ! worker '$w' is REMOTE — it bills on every session, whether or not"
+    echo "      you chat. For free local work: ai-stack models $s <local-model>"
+  fi
   case "$c" in
     true)  echo "    curator: on   — writes .lore.md (needs a capable model)" ;;
     false) echo "    curator: off  — opt in with: ai-stack models --curator on" ;;
@@ -805,7 +870,10 @@ case "$CMD" in
     print_client_config
     ;;
   models|model)
-    models "${2:-}" "${3:-}"
+    # Pass through up to three args: an optional --yes, then session/worker.
+    # Shifting the flag here and dropping it would silently discard the
+    # worker when called as `models --yes <session> <worker>`.
+    models "${2:-}" "${3:-}" "${4:-}"
     ;;
   stop|down)
     cd "$DIR"

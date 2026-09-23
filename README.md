@@ -261,11 +261,36 @@ the available list rather than written.
 
 ```
   Available models (served by the gateway AND usable now):
-    deepseek-v4-flash        cloud
-    deepseek-v4-pro          cloud
+    deepseek-v4-flash        remote
+    deepseek-v4-pro          remote
     qwen3:8b                 local   thinking: more tokens per call
     ministral-3:8b           local
 ```
+
+**`local` vs `remote` is the label that costs money.** Local means Ollama on
+this machine (free per call); remote means a cloud provider that bills per
+token. Choosing a **remote model as the worker is confirmed before writing**,
+because the worker runs on every session — distillation, curation and query
+expansion — whether or not you chat, so a remote worker meters continuously:
+
+```
+  ⚠ 'deepseek-v4-flash' is a REMOTE model and you have chosen it as the WORKER.
+
+    The worker runs on EVERY session ... A remote worker bills continuously,
+    so this turns a free local stack into a metered one.
+
+  Use a remote worker anyway? [y/N]:
+```
+
+Declining leaves `.lore.json` untouched. In a non-interactive shell the write is
+**refused** rather than silently accepted, so a script cannot meter you by
+accident; pass `--yes` before the models to opt in deliberately
+(`ai-stack models --yes <session> <remote-worker>`). A remote worker is also
+flagged in the current-selection output afterwards, since it is otherwise
+indistinguishable from a free one.
+
+Remote _is_ the right call when your local model cannot curate well — a cheap
+cloud worker beats a small local one, and Lore's curation floor is 32B+.
 
 `thinking` is a **hint, not a filter.** Thinking models spend tokens reasoning
 before answering, which costs time per worker call — but it is local and free,
