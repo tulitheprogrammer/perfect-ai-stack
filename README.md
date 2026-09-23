@@ -1,9 +1,12 @@
 # perfect-ai-stack
 
-**AI proxy stack** — LiteLLM (with Headroom compression) + Lore in Docker,
-plus per-repo lat.md knowledge graph scaffolded git-hook enforcement.
+**AI proxy stack** 
+LiteLLM (with Headroom compression sidecar) 
++ Lore in Docker,
++ per-repo lat.md knowledge graph scaffolded git-hook enforcement.
 
 ```
+// e.g using Zed IDE
 Zed -> Lore (:3207) -> LiteLLM + Headroom (:4000) -> DeepSeek / Anthropic / OpenAI / Ollama (host)
 ```
 
@@ -17,14 +20,16 @@ npx perfect-ai-stack init
 ```
 
 `init` starts the gateway, scaffolds `lat.md/` + the pre-commit hook, and
-prints the IDE config to use. Safe to re-run; if the gateway is already up it
-skips startup instead of restarting it. Requires Docker Desktop (see
-[Prerequisites](#prerequisites)).
+prints the IDE config to use. Safe to re-run; 
+if the gateway is already up it, skips startup instead of restarting it. 
+Requires Docker Desktop (see [Prerequisites](#prerequisites)).
 
 `npx` installs the package into npm's cache and runs `bin/ai-stack.sh` from
-there. Project files (`.env`, `lat.md/`, git hooks) always land in the project
-you run it from. Keep the memory DB and Headroom cache out of the npx cache dir
-so they survive upgrades:
+there. 
+Project files (`.env`, `lat.md/`, git hooks) always land in the project
+you run it from. 
+
+Keep the memory DB and Headroom cache out of the npx cache dir, so they survive upgrades:
 
 ```sh
 export AI_STACK_DATA_DIR=~/.ai-stack      # Lore DB + Headroom cache (shared across projects)
@@ -35,8 +40,8 @@ Working on the stack itself? Clone it and see
 
 ## Prerequisites
 
-**Docker Desktop, installed and running.** That's the only requirement — no
-API keys needed to try it (local models run through Ollama).
+**Docker Desktop, installed and running.** 
+That's the only requirement — no API keys needed to try it (local models run through Ollama).
 
 ```sh
 open -a Docker      # macOS; wait for the whale icon to stop animating
@@ -57,15 +62,15 @@ Then point your IDE at the gateway:
 ```
 Base URL:  http://localhost:3207/v1
 API key:   any non-empty string (auth is off on this local stack)
-Model:     llama3.1:8b        (free, local via Ollama)
+Model:     [ollama model](https://withlore.ai/docs/guides/local-inference/#ollama) (free, local via Ollama)
            deepseek-v4-flash   (needs OPENAI_API_KEY)
 ```
 
 No IDE config to write: the same endpoint works for Zed, Cursor, VS Code
 (Continue/Copilot), and anything else that takes a custom base URL.
 
-**Already use a tool with built-in memory or context compression?** Read
-[Choosing what to use](#choosing-what-to-use) before pointing it here — for
+**Already use a tool with built-in memory or context compression?** 
+Read [Choosing what to use](#choosing-what-to-use) before pointing it here — for
 Claude Code and Copilot you likely want only part of this stack.
 
 > **Ran Lore on the host before?** Clear the stale env vars first — they
@@ -147,15 +152,15 @@ switching models needs no restart and doesn't affect other projects.
 
 ```sh
 npx perfect-ai-stack models                              # list + pick interactively
-npx perfect-ai-stack models deepseek-v4-pro llama3.1:8b  # session, worker
+npx perfect-ai-stack models deepseek-v4-flash qwen3:8b  # session, worker can be either qwen2.5:3b-instruct/qwen2.5:1.5b-instruct/llama3.1:8b - non-thinking by default
 ```
 
 That writes `.lore.json`:
 
 ```json
 {
-  "model": { "providerID": "openai", "modelID": "deepseek-v4-pro" },
-  "workerModel": { "providerID": "openai", "modelID": "llama3.1:8b" }
+  "model": { "providerID": "openai", "modelID": "deepseek-v4-flash" },
+  "workerModel": { "providerID": "openai", "modelID": "qwen3:8b" }
 }
 ```
 
@@ -176,8 +181,8 @@ expansion per recall. Point it at a cloud model and you pay on every session.
 Point it at Ollama and that cost is zero.
 
 ```sh
-ollama pull llama3.1:8b                                # 7B: fine for distillation
-npx perfect-ai-stack models deepseek-v4-flash llama3.1:8b
+ollama pull qwen3:8b                                # 7B: fine for distillation
+npx perfect-ai-stack models deepseek-v4-flash qwen3:8b
 ```
 
 This is the recommended shape: **frontier model for the session, local model
