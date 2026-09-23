@@ -232,6 +232,50 @@ That writes `.lore.json`:
   LiteLLM over the OpenAI protocol. **Don't split providers** — cross-provider
   worker calls fail (wrong credentials, wrong API format).
 
+### Changing models later
+
+Per project, stored in `.lore.json`, and effective immediately — no gateway
+restart, no effect on your other projects:
+
+```sh
+npx perfect-ai-stack models                          # show current + change
+npx perfect-ai-stack models qwen3:8b llama3.1:8b     # set session + worker
+npx perfect-ai-stack models --curator on             # opt in to curation
+npx perfect-ai-stack models --curator off            # opt out (default)
+npx perfect-ai-stack models --reset                  # back to the defaults
+npx perfect-ai-stack models --help
+```
+
+Bare `models` prints the effective selection and **warns if a chosen model is
+not served by the gateway** — otherwise that only surfaces later as a confusing
+`Invalid model name` at request time. Interactive runs show the current value
+as the default, so pressing Enter keeps it.
+
+Everything lands in `.lore.json` at your project root:
+
+```json
+{
+  "model": { "providerID": "openai", "modelID": "qwen3:8b" },
+  "workerModel": { "providerID": "openai", "modelID": "qwen3:8b" },
+  "curator": { "enabled": false }
+}
+```
+
+It is meant to be committed, so the whole team gets the same models. Hand-editing
+is fine too — the CLI merges rather than overwrites, and preserves keys it does
+not own (like `knowledge`).
+
+**Adding a brand-new model** is the one change that needs a restart, because
+LiteLLM must know the provider, key, and pricing before the name means anything:
+
+1. append a `model_list` entry in `config/litellm.yaml`
+2. `npx perfect-ai-stack restart`
+3. `npx perfect-ai-stack models <new-model> ...`
+
+A ready-made local block (`qwen2.5-coder:14b`) is already present, commented.
+Step 2 is what makes the name appear in `/v1/models`; skipping it is the
+common cause of "model not found" after editing the config.
+
 ### Onboarding picks these for you
 
 `init` asks for the session and worker model as part of setup, so a new

@@ -293,42 +293,201 @@ available_models() {
 
 # Show + set the model selection for THIS project.
 #
-# Selection is per-project, stored in .lore.json (Lore reads workerModel from
-# there), so switching models needs no gateway restart and does not affect
-# other projects. The env LORE_WORKER_MODEL stays the global fallback.
+# Usage:
+#   ai-stack models                       # show current selection + what's available
+#   ai-stack models <session> [worker]    # set them
+#   ai-stack models --curator on|off      # toggle curation
+#   ai-stack models --reset               # back to the defaults
+#
+# Selection is per-project, stored in .lore.json (Lore reads model/workerModel
+# from there), so switching needs no gateway restart and does not affect other
+# projects. LORE_WORKER_MODEL stays the global env fallback.
 models() {
   local target="$PWD"
-  echo "Available models (from the gateway):"
+  local cfg="$target/.lore.json"
+
+  case "${1:-}" in
+    --reset)
+      write_model_choice "$target" "qwen3:8b" "qwen3:8b"
+      return 0
+      ;;
+    --curator)
+      set_curator "$target" "${2:-}"
+      return 0
+      ;;
+    --help|-h)
+      show_models_help
+      return 0
+      ;;
+  esac
+
+  # No arguments: show the current state, then offer to change it.
+  if [ -z "${1:-}" ]; then
+    show_model_state "$cfg"
+    if [ ! -t 0 ]; then
+      echo "  To change them:"
+      echo "    ai-stack models <session-model> [worker-model]"
+      echo "    ai-stack models --curator on|off"
+      echo "    ai-stack models --reset"
+      return 0
+    fi
+    echo ""
+    printf "  Change them now? [y/N]: "
+    read -r go
+    case "$go" in [Yy]*) ;; *) return 0 ;; esac
+  fi
+
+  echo ""
+  echo "Available models (served by the gateway):"
   local names
   names="$(available_models)"
   if [ -z "$names" ]; then
     echo "  (gateway not reachable — run 'ai-stack start' first)"
-  else
-    echo "$names" | sed 's/^/  - /'
+    return 1
   fi
+  echo "$names" | sed 's/^/  - /'
   echo ""
 
-  # Non-interactive: `ai-stack models <session> <worker>` writes the choice.
+  # Non-interactive: `ai-stack models <session> <worker>` sets directly.
   if [ -n "${1:-}" ]; then
     write_model_choice "$target" "${1}" "${2:-}"
+    echo ""
+    show_model_state "$cfg"
     return 0
   fi
-
   if [ ! -t 0 ]; then
     echo "  To set models non-interactively:"
     echo "    ai-stack models <session-model> [worker-model]"
     return 0
   fi
 
-  printf "  Session model [qwen3:8b]: "
+  local cur_s cur_w
+  cur_s="$(read_model_field "$cfg" model)"
+  cur_w="$(read_model_field "$cfg" workerModel)"
+  printf "  Session model [%s]: " "${cur_s:-qwen3:8b}"
   read -r session
-  session="${session:-qwen3:8b}"
+  session="${session:-${cur_s:-qwen3:8b}}"
   echo "  Worker runs on every session (distillation/curation) — keep it LOCAL and"
-  echo "  free. qwen3:8b is the measured-best local model (curation eval)."
-  printf "  Worker model  [qwen3:8b]: "
+  echo "  free. qwen3:8b is the measured-best local model (see scripts/eval-worker.sh)."
+  printf "  Worker model  [%s]: " "${cur_w:-qwen3:8b}"
   read -r worker
-  worker="${worker:-qwen3:8b}"
+  worker="${worker:-${cur_w:-qwen3:8b}}"
   write_model_choice "$target" "$session" "$worker"
+  echo ""
+  show_model_state "$cfg"
+}
+
+show_models_help() {
+  cat <<'EOF'
+  ai-stack models — choose the session and worker models for this project
+
+    ai-stack models                        show current selection
+    ai-stack models <session> [worker]     set them (e.g. qwen3:8b llama3.1:8b)
+    ai-stack models --curator on           opt in to curation (.lore.md export)
+    ai-stack models --curator off          opt out (the default)
+    ai-stack models --reset                restore the defaults
+
+  Stored in .lore.json at your project root, so it is per-project and needs no
+  gateway restart. Re-run anytime; the environment default is unaffected.
+
+  A model name must exist in config/litellm.yaml. To add a new one, append a
+  model_list entry there and run `ai-stack restart` once.
+EOF
+}
+
+# Print the effective selection, flagging anything that is not serving.
+show_model_state() {
+  local cfg="$1"
+  local s w c
+  s="$(read_model_field "$cfg" model)"
+  w="$(read_model_field "$cfg" workerModel)"
+  c="$(read_curator "$cfg")"
+  echo "  Current selection ($cfg):"
+  echo "    session: ${s:-qwen3:8b (env default)}"
+  echo "    worker:  ${w:-$s (follows session)}"
+  case "$c" in
+    true)  echo "    curator: on   — writes .lore.md (needs a capable model)" ;;
+    false) echo "    curator: off  — opt in with: ai-stack models --curator on" ;;
+    *)     echo "    curator: off  — opt in with: ai-stack models --curator on" ;;
+  esac
+
+  # Warn when a chosen model is not currently served: the failure otherwise
+  # only appears at request time as a confusing "Invalid model name".
+  local avail
+  avail="$(available_models)"
+  if [ -n "$avail" ]; then
+    local m
+    for m in "$s" "$w"; do
+      [ -n "$m" ] || continue
+      if ! printf '%s\n' "$avail" | grep -qxF "$m"; then
+        echo "    ! '$m' is not served by the gateway — add it to config/litellm.yaml"
+        echo "      then run: ai-stack restart"
+      fi
+    done
+  fi
+}
+
+# Read modelID from a .lore.json path (model or workerModel); empty if unset.
+read_model_field() {
+  local cfg="$1" key="$2"
+  [ -f "$cfg" ] || return 0
+  node -e '
+    const fs = require("fs");
+    try {
+      const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.stdout.write((c[process.argv[2]] || {}).modelID || "");
+    } catch {}
+  ' "$cfg" "$key" 2>/dev/null || true
+}
+
+read_curator() {
+  local cfg="$1"
+  [ -f "$cfg" ] || return 0
+  node -e '
+    const fs = require("fs");
+    try {
+      const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      if (c.curator && typeof c.curator.enabled === "boolean") {
+        process.stdout.write(String(c.curator.enabled));
+      }
+    } catch {}
+  ' "$cfg" 2>/dev/null || true
+}
+
+# Toggle curation (the .lore.md export). Off by default; opt-in is explicit.
+set_curator() {
+  local target="$1" want="${2:-}"
+  local cfg="$target/.lore.json"
+  case "$want" in
+    on|true|enable|enabled)
+      node -e '
+        const fs = require("fs");
+        const [p] = process.argv.slice(1);
+        let c = {}; try { c = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+        c.curator = { enabled: true };
+        fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+      ' "$cfg" || { echo "  failed to write $cfg"; return 1; }
+      echo "  Curation ON — Lore will write .lore.md entries automatically."
+      echo "  .lore.md is committed and PR-reviewed, so check what it records."
+      echo "  Lore's floor is 32B+ for reliable curation; on an 8B worker expect"
+      echo "  misclassified entries. Verify with: sh scripts/eval-worker.sh"
+      ;;
+    off|false|disable|disabled)
+      node -e '
+        const fs = require("fs");
+        const [p] = process.argv.slice(1);
+        let c = {}; try { c = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+        c.curator = { enabled: false };
+        fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+      ' "$cfg" || { echo "  failed to write $cfg"; return 1; }
+      echo "  Curation OFF — distillation, recall, context management and lat.md"
+      echo "  indexing all keep working; .lore.md stops being written."
+      ;;
+    *)
+      echo "  Usage: ai-stack models --curator on|off"
+      return 1
+      ;;
+  esac
 }
 
 # Merge the two model choices into .lore.json without clobbering other keys.
@@ -548,7 +707,7 @@ case "$CMD" in
     echo ""
     echo "Commands:"
     echo "  init       Do everything: start gateway + scaffold this project"
-    echo "  models     Show/set the session + worker models for this project"
+    echo "  models     Show/set the session + worker models (or --curator on|off)"
     echo "  wizard     Interactive setup for API keys"
     echo "  start      Start the gateway (LiteLLM + Headroom + Lore, in Docker)"
     echo "  stop       Stop the gateway"
