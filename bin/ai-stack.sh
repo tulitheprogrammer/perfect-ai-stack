@@ -260,6 +260,11 @@ init() {
 # default. Writes .lore.json (merging, so a re-run keeps other keys).
 #
 # Non-interactive: keep whatever .lore.json already says, else write defaults.
+#
+# The defaults are only written if they are actually usable. On a fresh machine
+# Ollama may not be running or qwen3:8b may not be pulled, and writing a worker
+# that cannot answer would fail later in the background where it is invisible.
+# Fall back to any local model, and to the session model only as a last resort.
 choose_models() {
   local target="$1"
   local cfg="$target/.lore.json"
@@ -267,10 +272,26 @@ choose_models() {
   if [ ! -t 0 ]; then
     if [ -f "$cfg" ]; then
       echo "  Models: keeping existing .lore.json"
-    else
-      echo "  Models: defaults (qwen3:8b session + worker, curator off)"
-      write_model_choice "$target" "qwen3:8b" "qwen3:8b"
+      show_model_state "$cfg"
+      return 0
     fi
+
+    local session worker
+    if model_is_available "qwen3:8b" && model_is_local "qwen3:8b"; then
+      session="qwen3:8b"; worker="qwen3:8b"
+    else
+      # Prefer any local model; qwen3:8b is only the shipped favourite.
+      worker="$(available_models | awk -F'\t' '$2=="local" {print $1; exit}')"
+      session="$worker"
+    fi
+
+    if [ -z "$worker" ]; then
+      echo "  Models: none available yet — no .lore.json written."
+      echo "  Start Ollama and pull a model, then re-run:  ollama pull qwen3:8b"
+      return 0
+    fi
+    echo "  Models: defaults ($session session + worker, curator off)"
+    write_model_choice "$target" "$session" "$worker"
     return 0
   fi
 
@@ -554,6 +575,23 @@ prompt_available_model() {
     if [ "$filter" = "local" ] && [ "$b" != "local" ]; then continue; fi
     printf '%s\t%s\n' "$n" "$b"
   done)"
+
+  # A local-only prompt with no local models means Ollama is unreachable or
+  # nothing is pulled. Refuse rather than quietly falling through to the remote
+  # entries, which would hand the user a metered worker at the moment the
+  # protection matters most.
+  if [ "$filter" = "local" ] && [ -z "$options" ]; then
+    echo ""
+    echo "  No LOCAL models are available, so no worker can be chosen."
+    echo "  The worker runs on every session, so it is deliberately not defaulted"
+    echo "  to a remote model."
+    echo ""
+    echo "  Fix one of:"
+    echo "    - start Ollama:      ollama serve"
+    echo "    - pull a model:      ollama pull qwen3:8b"
+    echo "    - allow a remote worker on purpose: ai-stack models --yes <session> <remote>"
+    return 1
+  fi
 
   # Menu only when we can read single keys. `read -rsn1` needs bash; this script
   # is run by sh, so probe for bash explicitly and fall back if absent.
