@@ -63,14 +63,14 @@ Then point your IDE at the gateway:
 ```
 Base URL:  http://localhost:3207/v1
 API key:   any non-empty string (auth is off on this local stack)
-Model:     [ollama model](https://withlore.ai/docs/guides/local-inference/#ollama) (free, local via Ollama)
-           deepseek-v4-flash   (needs OPENAI_API_KEY)
+Model:     <worker_model> (free, local via Ollama)
+           deepseek-v4-flash   (needs OPENAI_API_KEY, or use free ollama model: https://withlore.ai/docs/guides/local-inference/#ollama))
 ```
 
 No IDE config to write: the same endpoint works for Zed, Cursor, VS Code
 (Continue/Copilot), and anything else that takes a custom base URL.
 
-**Already use a tool with built-in memory or context compression?**
+**Already using a tool with built-in memory or context compression?**
 Read [Choosing what to use](#choosing-what-to-use) before pointing it here — for
 Claude Code and Copilot you likely want only part of this stack.
 
