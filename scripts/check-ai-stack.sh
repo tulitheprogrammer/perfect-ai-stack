@@ -20,6 +20,12 @@
 # 3. Model-availability advice. A model that is absent because it was RENAMED
 #    must not be reported as "add it to config/litellm.yaml" — the config is
 #    already correct, and that hint sends the user to edit the wrong thing.
+# 4. Shared worker model. Lore resolves the worker model as
+#    LORE_WORKER_MODEL (env) > .lore.json workerModel > cost-aware default. One
+#    container mounts one project at /app, so .lore.json's worker field is
+#    invisible to every project except the mounted one — the env var is the only
+#    channel that spans projects. write_shared_worker must therefore persist it
+#    to the stack .env WITHOUT disturbing the user's other lines.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -233,9 +239,68 @@ if [ -f "$case_tmp/.lore.json" ]; then
   fi
 fi
 
+# ── 4: shared worker model ─────────────────────────────────────────────────
+
+# The migration is the risky part: the stack .env usually holds API keys, and a
+# naive rewrite would drop them. Exercise the real function against a temp dir.
+SW=$(sed -n '/^write_shared_worker()/,/^}$/p' bin/ai-stack.sh)
+[ -n "$SW" ] || { echo "  FAIL could not locate write_shared_worker"; exit 1; }
+
+sw_tmp=$(mktemp -d)
+printf 'DEEPSEEK_API_KEY=sk-not-real\nLORE_WORKER_MODEL=openai/stale\n' > "$sw_tmp/.env"
+node -e 'process.exit(0)' 2>/dev/null || true
+(
+  DIR="$sw_tmp"
+  gateway_is_up() { return 1; }
+  eval "$SW"
+  write_shared_worker "qwen3:8b" >/dev/null 2>&1
+) 2>/dev/null || true
+
+if grep -q '^LORE_WORKER_MODEL=openai/qwen3:8b$' "$sw_tmp/.env"; then
+  echo "  ok   worker model written to the stack .env"
+else
+  echo "  FAIL worker model not written (or wrong format)"
+  fails=$((fails + 1))
+fi
+
+if grep -q '^DEEPSEEK_API_KEY=sk-not-real$' "$sw_tmp/.env"; then
+  echo "  ok   existing .env lines preserved (keys survive)"
+else
+  echo "  FAIL existing .env lines were dropped"
+  fails=$((fails + 1))
+fi
+
+n=$(grep -c '^LORE_WORKER_MODEL=' "$sw_tmp/.env")
+if [ "$n" -eq 1 ]; then
+  echo "  ok   exactly one LORE_WORKER_MODEL line (stale one replaced)"
+else
+  echo "  FAIL $n LORE_WORKER_MODEL lines (expected 1)"
+  fails=$((fails + 1))
+fi
+rm -rf "$sw_tmp"
+
+# The worker must be persisted somewhere the CONTAINER reads. .env in the stack
+# dir is the only place Compose loads, so assert the function targets it rather
+# than a per-project file.
+if printf '%s\n' "$SW" | grep -q 'env_file="\$DIR/.env"'; then
+  echo "  ok   writes to \$DIR/.env (the path Compose loads)"
+else
+  echo "  FAIL write_shared_worker does not target \$DIR/.env"
+  fails=$((fails + 1))
+fi
+
+# Both mounts must exist: /app for the mounted project's files, and the real
+# absolute path so a project-named request resolves in-container.
+if grep -q '\${AI_STACK_PROJECT_DIR:-.}:\${AI_STACK_PROJECT_DIR:-/app}' docker-compose.yml; then
+  echo "  ok   compose mounts the project at its real absolute path"
+else
+  echo "  FAIL compose does not mount \$AI_STACK_PROJECT_DIR at its own path"
+  fails=$((fails + 1))
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then
-  echo "PASS: wizard keys + menu + model advice + list dedup + defaults (17 cases)"
+  echo "PASS: wizard keys + menu + model advice + list dedup + defaults + shared worker (21 cases)"
 else
   echo "FAIL: $fails case(s)"
   exit 1

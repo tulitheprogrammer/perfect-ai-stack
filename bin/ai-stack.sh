@@ -333,7 +333,28 @@ init() {
   echo ""
 
   if gateway_is_up; then
-    echo "  Gateway already running — skipping startup."
+    # A running gateway is already mounted to SOME project (compose bakes the
+    # mount at container creation), so this project's files are invisible to it
+    # unless that project IS this one. Saying nothing here is how a correct
+    # .lore.json goes unread and the worker silently falls back. Detect and say
+    # so instead of skipping in silence.
+    local mounted
+    mounted="$(docker inspect ai-lore --format '{{range .Mounts}}{{if eq .Destination "/app"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+    if [ -n "$mounted" ] && [ "$mounted" != "$target" ]; then
+      echo "  Gateway already running, mounted to a different project:"
+      echo "    mounted:  $mounted"
+      echo "    this one: $target"
+      echo ""
+      echo "  Lore can only read the mounted project's .lore.json, so THIS"
+      echo "  project's settings are not in effect. To switch the gateway over:"
+      echo "    ai-stack stop && cd $target && ai-stack init"
+      echo ""
+      echo "  Continuing with the shared worker model (LORE_WORKER_MODEL), which"
+      echo "  applies across projects regardless of the mount."
+      echo ""
+    else
+      echo "  Gateway already running — skipping startup."
+    fi
   else
     check_deps
     # Capture the project dir BEFORE cd-ing to the stack dir: start_stack reads
@@ -953,6 +974,53 @@ set_curator() {
   esac
 }
 
+# Persist the chosen worker model to the STACK .env as LORE_WORKER_MODEL, so it
+# applies to every project on this machine rather than only the one whose
+# .lore.json Lore happens to be mounted to.
+#
+# Why this and not .lore.json: Lore resolves the worker model in this order
+# (packages/gateway/src/worker-model.ts):
+#   1. LORE_WORKER_MODEL env  - returned before the config file is even read
+#   2. .lore.json workerModel - read from join(projectDir, ".lore.json")
+#   3. cost-aware default     - cheaper same-family model when the session is
+#                               expensive
+#   4. session model / provider default
+# Rung 2 needs the project directory to be the one Lore was mounted with, and
+# one container can only have one /app. So with a shared gateway, .lore.json's
+# worker field is invisible for every project except the mounted one, while the
+# env var is the only channel that actually spans projects. Session model is
+# genuinely per-project and stays in .lore.json.
+write_shared_worker() {
+  local worker="$1"
+  local env_file="$DIR/.env"
+  [ -n "$worker" ] || return 0
+
+  # Compose reads .env from the stack dir; preserve every other line untouched
+  # so the user's API keys survive.
+  local tmp
+  tmp="$(mktemp)"
+  if [ -f "$env_file" ]; then
+    grep -v '^LORE_WORKER_MODEL=' "$env_file" > "$tmp" || true
+  fi
+  printf 'LORE_WORKER_MODEL=openai/%s\n' "$worker" >> "$tmp"
+  mv "$tmp" "$env_file"
+
+  # Print the resolved path, not $DIR: under npx, $DIR is the npm cache copy.
+  # npm hardlinks it to the same inode as the repo file, so the write is correct
+  # either way, but the cache path reads as a stranger's directory and makes a
+  # correct write look misplaced.
+  local shown
+  shown="$(cd "$DIR" 2>/dev/null && pwd -P || echo "$DIR")/.env"
+  echo "  Wrote LORE_WORKER_MODEL=openai/$worker to $shown"
+  echo "    (shared: applies to every project; takes precedence over .lore.json)"
+  # The env var is read by the CONTAINER, so a running gateway keeps the old
+  # value until it is recreated — `restart` reuses the baked environment.
+  if gateway_is_up; then
+    echo "    ! the gateway is running with the previous value — apply with:"
+    echo "        cd $DIR && docker compose up -d --force-recreate lore"
+  fi
+}
+
 # Merge the two model choices into .lore.json without clobbering other keys.
 # Uses node (already a dependency of this package's runtime) instead of jq,
 # which is not installed by default on macOS.
@@ -975,6 +1043,12 @@ write_model_choice() {
     if (!cfg.curator) cfg.curator = { enabled: false };
     fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
   ' "$cfg" "$session" "$worker" || { echo "  failed to write $cfg"; return 1; }
+
+  # The worker goes to both places on purpose: .lore.json keeps a project
+  # self-describing for anyone reading it, while the env var is what actually
+  # takes effect across projects (rung 1 beats rung 2).
+  write_shared_worker "$worker"
+
   echo ""
   echo "  Wrote $cfg:"
   echo "    session: $session"

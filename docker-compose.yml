@@ -47,10 +47,17 @@ services:
     volumes:
       # Lore's memory (SQLite DB + embeddings) — host-side, survives teardown
       - ${AI_STACK_DATA_DIR:-./data}/lore:/root/.local/share/lore
-      # cwd (and .lore.md export target) = the project you ran start from, so
-      # exports land in that repo (set AI_STACK_PROJECT_DIR under npx; defaults
-      # to the stack dir so clones behave like before)
+      # /app is the DIRECTORY LORE TREATS AS THE PROJECT. It must be the
+      # absolute path of the project you want memory attributed to, not its
+      # parent: Lore resolves .lore.json and scopes knowledge from this path.
+      # Setting it to a parent would merge every project's memory into one.
+      # Set AI_STACK_PROJECT_DIR to the project itself (init does this).
       - ${AI_STACK_PROJECT_DIR:-.}:/app
+      # The same project, mounted at its REAL absolute path, so a request that
+      # names its project (X-Lore-Project) resolves to a directory that exists
+      # inside the container. Without this, only /app resolves and every
+      # project is attributed to whichever one was mounted at startup.
+      - ${AI_STACK_PROJECT_DIR:-.}:${AI_STACK_PROJECT_DIR:-/app}
       # The embedding model (~137MB int8 ONNX) is downloaded on first use into
       # the gateway's .cache. Keeping that on the host means a recreate (or
       # `update`) reuses it instead of re-downloading, and a truncated download

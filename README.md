@@ -542,19 +542,81 @@ Ollama exists.
 ## One stack, many projects
 
 The stack is cloned **once** — every project you work in uses the same
-running gateway (Lore keys memory per project via its git remote, not per
-clone), and `lat` is a single global npm install. Per-project setup is just
-the lat.md scaffold + pre-commit hook:
+running gateway, and `lat` is a single global npm install. Per-project setup is
+the lat.md scaffold + pre-commit hook plus this project's own model choice:
 
 ```sh
 cd ~/code/project-a
-sh /path/to/perfect-ai-stack/bin/ai-stack.sh setup-lat
+sh /path/to/perfect-ai-stack/bin/ai-stack.sh init     # scaffold + choose session model
 # or from anywhere: sh .../ai-stack.sh setup-lat ~/code/project-b
 ```
 
 Run it once per project — nothing to clone or reinstall. `start`/`stop`/
 `logs`/`update` stay in the stack clone; point each project's IDE at the
 shared gateway (see “IDE / agent setup”).
+
+### What is shared and what is per-project
+
+Lore resolves the **worker** model in this order (see
+`packages/gateway/src/worker-model.ts`):
+
+| Priority | Source                                               | Scope                    |
+| -------- | ---------------------------------------------------- | ------------------------ |
+| 1        | `LORE_WORKER_MODEL` env                              | **all projects**         |
+| 2        | `.lore.json` → `workerModel`                         | the mounted project only |
+| 3        | cost-aware default (cheaper same-family model)       | per session              |
+| 4        | `.lore.json` → `model`, else the session's own model | per project              |
+| 5        | the provider's built-in default                      | —                        |
+
+`ai-stack models <session> <worker>` therefore writes the worker to the stack
+`.env` **as well as** the project's `.lore.json`:
+
+- the **`.env` entry is what takes effect** — priority 1 is returned before the
+  config file is even read, so it applies to every project on the machine;
+- the `.lore.json` entry is kept so the project stays self-describing (and so a
+  clone of it behaves correctly on its own).
+
+The **session** model is genuinely per-project and lives only in `.lore.json`.
+Because one container mounts one directory at `/app` (see below), a second
+project's `.lore.json` session model only applies when the gateway is started
+against that project:
+
+```sh
+cd ~/code/project-b && ai-stack stop && ai-stack init
+```
+
+`init` says so explicitly when the running gateway is mounted elsewhere, rather
+than skipping in silence.
+
+### Why the worker is global
+
+One container has one `/app` bind mount, so a per-project `.lore.json`
+cannot be visible to every project at once — Lore's config loader reads
+exactly `join(projectDir, ".lore.json")` with no search path. Any setting that
+must hold across projects has to travel by environment variable. The worker
+model is the setting where this matters most: it runs on **every** session
+(whether or not you chat), so a wrong value bills continuously.
+
+The worker also has no reason to differ per project — unlike the session model,
+which is what you type into your editor.
+
+### The project mount
+
+`init` sets `AI_STACK_PROJECT_DIR`, and Compose mounts it twice:
+
+| Mount                 | Purpose                                                  |
+| --------------------- | -------------------------------------------------------- |
+| `<project>:/app`      | Lore's project root — `.lore.json`, `.lore.md`, `.lore/` |
+| `<project>:<project>` | the same directory at its **real absolute path**         |
+
+The second mount is what lets a request that names its project (the
+`X-Lore-Project` header, or `lore run`) resolve to a directory that exists
+inside the container. Without it only `/app` resolves, and every project gets
+attributed to whichever one was mounted at startup.
+
+If `AI_STACK_PROJECT_DIR` is unset, it defaults to the stack directory — so a
+gateway started by bare `ai-stack start` (not `init`) mounts the stack repo
+itself, and no project's `.lore.json` is read. Set it explicitly, or use `init`.
 
 ## Environment Variables
 
@@ -635,6 +697,14 @@ model name sent to `LORE_WORKER_UPSTREAM` and **must exist in LiteLLM's
 
 - `openai/…` — OpenAI-compatible chat completions (LiteLLM, DeepSeek, Ollama).
 - `anthropic/…` — Anthropic Messages API.
+
+It is the **highest-priority** source for the worker model — returned before the
+config file is read — so it applies to every project regardless of which one the
+container is mounted to. `ai-stack models` writes it to the stack `.env` for you;
+prefer that over editing `.lore.json` by hand. Set it here (not per project) if
+you want one shared worker across all your projects, which is the supported setup
+for a shared gateway. See
+[One stack, many projects](#one-stack-many-projects) for the full precedence.
 
 Lore resolves `providerID` and derives the protocol from it — it does not parse
 a prefix string, and there is no implicit `anthropic` fallback for a bare model
@@ -1057,6 +1127,38 @@ If instead the model name _is_ in `config/litellm.yaml` but not served, the
 container is running older config — see
 [Changes to environment variables have no effect](#changes-to-environment-variables-have-no-effect)
 for the recreate step.
+
+### Worker calls fail with "Invalid model name" for a model you did not choose
+
+```
+[lore] worker upstream request failed: 400 — model=anthropic/claude-sonnet-4-6
+```
+
+Lore picked a worker you never selected. Cause: neither `LORE_WORKER_MODEL`
+nor a readable `.lore.json` resolved, so it fell through to the provider's
+built-in default (Anthropic's is a Sonnet), which this stack's
+`config/litellm.yaml` does not serve.
+
+The usual root cause is the **project mount**, not the config: one container
+mounts one directory at `/app`, so if the gateway was started from a different
+project (or from the stack directory itself), your `.lore.json` is invisible.
+Check both:
+
+```sh
+docker exec ai-lore printenv LORE_WORKER_MODEL
+docker inspect ai-lore --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+```
+
+Fix by setting the shared worker (which applies regardless of the mount):
+
+```sh
+cd ~/code/your-project
+npx perfect-ai-stack models <session-model> <worker-model>
+cd /path/to/perfect-ai-stack && docker compose up -d --force-recreate lore
+```
+
+Note `init` warns when the running gateway is mounted to a different project;
+if you saw that warning and ignored it, this is the consequence.
 
 ### Requests fail with "model group ... not found"
 
