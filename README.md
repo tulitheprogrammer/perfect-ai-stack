@@ -602,6 +602,18 @@ cd ~/code/project-b && ai-stack stop && ai-stack init
 `init` says so explicitly when the running gateway is mounted elsewhere, rather
 than skipping in silence.
 
+Because the worker only reaches the container on **recreate**, `models` tells you
+the exact command when the running container is still on the old value:
+
+```sh
+cd /path/to/stack && AI_STACK_PROJECT_DIR='/your/project' docker compose up -d --force-recreate lore
+```
+
+The `AI_STACK_PROJECT_DIR` prefix is not optional — it is what Compose mounts at
+`/app`, and without it (run from the stack directory) the stack repo itself gets
+mounted instead, un-reading your project's `.lore.json`. A `restart` is never
+enough: it reuses the environment baked in at container creation.
+
 ### Why the worker is global
 
 One container has one `/app` bind mount, so a per-project `.lore.json`
@@ -1168,8 +1180,13 @@ Fix by setting the shared worker (which applies regardless of the mount):
 ```sh
 cd ~/code/your-project
 npx perfect-ai-stack models <session-model> <worker-model>
-cd /path/to/perfect-ai-stack && docker compose up -d --force-recreate lore
 ```
+
+`models` prints the exact recreate command to run — copy it. It has to carry
+`AI_STACK_PROJECT_DIR=<your project>`, because that variable is what Compose
+mounts at `/app`: running `docker compose up -d --force-recreate lore` from the
+stack directory without it re-mounts the **stack** at `/app`, which is the
+problem you are trying to fix.
 
 Note `init` warns when the running gateway is mounted to a different project;
 if you saw that warning and ignored it, this is the consequence.

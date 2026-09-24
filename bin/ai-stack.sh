@@ -1000,9 +1000,15 @@ set_curator() {
 # env var is the only channel that actually spans projects. Session model is
 # genuinely per-project and stays in .lore.json.
 write_shared_worker() {
-  local worker="$1"
+  local worker="$1" project="${2:-$PWD}"
   local env_file="$DIR/.env"
   [ -n "$worker" ] || return 0
+
+  # Resolve the project canonically (macOS /tmp is a symlink to /private/tmp).
+  # init records the mount as $PWD and compares it against docker's Source, so
+  # an unresolved path here would produce a spurious "mounted to a different
+  # project" warning on the next init.
+  project="$(cd "$project" 2>/dev/null && pwd -P || printf '%s' "$project")"
 
   # Compose reads .env from the stack dir; preserve every other line untouched
   # so the user's API keys survive.
@@ -1018,16 +1024,37 @@ write_shared_worker() {
   # npm hardlinks it to the same inode as the repo file, so the write is correct
   # either way, but the cache path reads as a stranger's directory and makes a
   # correct write look misplaced.
-  local shown
-  shown="$(cd "$DIR" 2>/dev/null && pwd -P || echo "$DIR")/.env"
+  #
+  # pwd -P also resolves the npx symlink, which matters below: the apply command
+  # tells the user to cd here, and the npm cache path only works while the
+  # symlink survives.
+  local stack_dir shown
+  stack_dir="$(cd "$DIR" 2>/dev/null && pwd -P || echo "$DIR")"
+  shown="$stack_dir/.env"
   echo "  Wrote LORE_WORKER_MODEL=openai/$worker to $shown"
   echo "    (shared: applies to every project; takes precedence over .lore.json)"
-  # The env var is read by the CONTAINER, so a running gateway keeps the old
-  # value until it is recreated — `restart` reuses the baked environment.
-  if gateway_is_up; then
-    echo "    ! the gateway is running with the previous value — apply with:"
-    echo "        cd $DIR && docker compose up -d --force-recreate lore"
-  fi
+
+  # The env var is read by the CONTAINER, which bakes its environment at
+  # creation: a running gateway keeps the old value until it is RECREATED
+  # (`restart` reuses the baked environment). So compare against what the
+  # container actually has, not against the file we just wrote — a .lore.json
+  # that already matched still leaves a stale container if it was never applied.
+  gateway_is_up || return 0
+  # No `head` here: with `set -o pipefail` its early exit can SIGPIPE docker and
+  # abort the run. sed reads the whole (small) dump and prints the one match;
+  # only one LORE_WORKER_MODEL line exists in a container's environment.
+  local baked
+  baked="$(docker inspect ai-lore --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n 's/^LORE_WORKER_MODEL=//p' || true)"
+  [ "openai/$worker" != "$baked" ] || return 0
+
+  echo "    ! the gateway is running with LORE_WORKER_MODEL=${baked:-<unset>} — apply with:"
+  # AI_STACK_PROJECT_DIR must be ON the command. Without it compose falls back to
+  # ${AI_STACK_PROJECT_DIR:-.}, which is the stack dir when run from here, so the
+  # hint would re-mount the STACK at /app instead of the project — Lore would
+  # then read no project .lore.json at all (the exact bug this file guards
+  # against). The project path is what /app has to be.
+  echo "        cd $stack_dir && AI_STACK_PROJECT_DIR='$project' docker compose up -d --force-recreate lore"
 }
 
 # Merge the two model choices into .lore.json without clobbering other keys.
@@ -1056,7 +1083,7 @@ write_model_choice() {
   # The worker goes to both places on purpose: .lore.json keeps a project
   # self-describing for anyone reading it, while the env var is what actually
   # takes effect across projects (rung 1 beats rung 2).
-  write_shared_worker "$worker"
+  write_shared_worker "$worker" "$target"
 
   echo ""
   echo "  Wrote $cfg:"

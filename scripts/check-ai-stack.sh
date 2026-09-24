@@ -207,8 +207,19 @@ fi
 
 # The display used to show a fallback name that was never persisted, so
 # "Current selection" could name a model .lore.json did not contain.
+#
+# These cases run the REAL `models` command (a subprocess, so the whole script
+# runs). write_model_choice also writes the shared worker to the stack .env,
+# which is the developer's live config — snapshot and restore it, or running the
+# checks silently rewrites their worker model.
 case_tmp=$(mktemp -d)
-trap 'rm -rf "$case_tmp"' EXIT
+env_backup="$case_tmp/.env.backup"
+env_present=""
+if [ -f .env ]; then
+  env_present="1"
+  cp .env "$env_backup"
+fi
+trap 'if [ -n "$env_present" ]; then cp "$env_backup" .env; else rm -f .env; fi; rm -rf "$case_tmp"' EXIT
 STACK_SH="$(pwd)/bin/ai-stack.sh"
 
 ( cd "$case_tmp" && sh "$STACK_SH" models >/dev/null 2>&1 </dev/null || true )
@@ -278,6 +289,40 @@ else
   fails=$((fails + 1))
 fi
 rm -rf "$sw_tmp"
+
+# ── 7: the apply command carries the mount ─────────────────────────────────
+
+# The env var only reaches the container on recreate, and compose resolves the
+# :/app mount from AI_STACK_PROJECT_DIR — defaulting to '.' (the stack dir) when
+# it is unset. A hint printed from the stack dir without that variable
+# re-mounts the STACK at /app, so Lore reads no project .lore.json at all: the
+# exact failure this whole area exists to prevent. Assert the apply command sets
+# it, and that the hint names the container's stale value.
+#
+# docker is stubbed to answer `inspect --format` with a stale model, standing in
+# for a running container that was never recreated.
+hint_out=$(h_tmp=$(mktemp -d); printf 'K=1\n' > "$h_tmp/.env"; \
+  DIR="$h_tmp";
+  gateway_is_up() { return 0; };
+  docker() { printf 'X\nLORE_WORKER_MODEL=openai/qwen3:8b\n'; };
+  eval "$SW";
+  write_shared_worker "ministral-3:8b" "/tmp/some-project";
+  rm -rf "$h_tmp") 2>/dev/null || true
+
+if printf '%s' "$hint_out" | grep -q "AI_STACK_PROJECT_DIR='/tmp/some-project'"; then
+  echo "  ok   apply command pins AI_STACK_PROJECT_DIR (mount stays correct)"
+else
+  echo "  FAIL apply command omits AI_STACK_PROJECT_DIR — would mount the stack dir"
+  printf '%s\n' "$hint_out" | sed 's/^/         /'
+  fails=$((fails + 1))
+fi
+
+if printf '%s' "$hint_out" | grep -q 'running with LORE_WORKER_MODEL=openai/qwen3:8b'; then
+  echo "  ok   stale container detected (baked value named in the hint)"
+else
+  echo "  FAIL did not report the running container's stale value"
+  fails=$((fails + 1))
+fi
 
 # The worker must be persisted somewhere the CONTAINER reads. .env in the stack
 # dir is the only place Compose loads, so assert the function targets it rather
