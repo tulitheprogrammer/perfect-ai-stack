@@ -781,6 +781,38 @@ EOF
 }
 
 # Print the effective selection, flagging anything that is not serving.
+# Is this name declared in config/litellm.yaml, regardless of whether it is
+# currently served? Distinguishes "you picked a name the config doesn't define"
+# (edit the config) from "the config defines it but the gateway hasn't picked it
+# up yet" (restart) from "the config never heard of it" (stale selection after a
+# rename — point at `models` instead of sending the user to edit the config).
+model_in_config() {
+  local name="$1"
+  [ -n "$name" ] || return 1
+  [ -f "$DIR/config/litellm.yaml" ] || return 1
+  grep -qE "^[[:space:]]*-[[:space:]]*model_name:[[:space:]]*['\"]?${name}['\"]?[[:space:]]*$" \
+    "$DIR/config/litellm.yaml"
+}
+
+# Explain why a selected model can't be used, and what to do about it.
+# The right advice depends on the cause, and the causes look identical in the
+# logs — a wrong hint here sends the user to edit a file that is already correct.
+why_unavailable() {
+  local m="$1"
+  if model_in_config "$m"; then
+    echo "    ! '$m' is defined in config/litellm.yaml but the gateway is not"
+    echo "      serving it — restart to pick up the config:"
+    echo "        ai-stack restart"
+  else
+    echo "    ! '$m' is not in config/litellm.yaml (not served, or a local model"
+    echo "      that is not pulled). If it was renamed, re-select with:"
+    echo "        ai-stack models"
+    echo "      To add a new model instead, append it to config/litellm.yaml and"
+    echo "      run: ai-stack restart"
+    echo "      Local models also need: ollama pull $m"
+  fi
+}
+
 show_model_state() {
   local cfg="$1"
   local s w c
@@ -811,9 +843,7 @@ show_model_state() {
   for m in "$s" "$w"; do
     [ -n "$m" ] || continue
     if ! model_is_available "$m"; then
-      echo "    ! '$m' is not available (not served, or a local model that is not pulled)"
-      echo "      add it to config/litellm.yaml and run: ai-stack restart"
-      echo "      local models also need: ollama pull $m"
+      why_unavailable "$m"
     fi
   done
 }

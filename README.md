@@ -1014,6 +1014,39 @@ If `docker compose up -d` prints `Container ai-litellm  Running` rather than
 `Recreated`, it kept the existing container — that output is your cue to add
 `--force-recreate`.
 
+### Model not available after a rename
+
+```
+! 'deepseek-v4-flash' is not available (not served, or a local model that is not pulled)
+```
+
+`.lore.json` stores the model **name**, so renaming a model in
+`config/litellm.yaml` leaves every project that had selected the old name
+pointing at a name that no longer exists. The stack still works; the selection
+just needs redoing.
+
+Re-select from what the gateway actually serves:
+
+```sh
+cd your-project
+npx perfect-ai-stack models        # then pick from the list
+```
+
+Or delete `.lore.json` and let `init` write the defaults again:
+
+```sh
+rm .lore.json && npx perfect-ai-stack init
+```
+
+Note that `init` keeps an existing `.lore.json` rather than replacing it, so a
+stale selection survives re-running `init` until you change or remove it — this
+is deliberate, since re-running `init` should never silently reset your models.
+
+If instead the model name _is_ in `config/litellm.yaml` but not served, the
+container is running older config — see
+[Changes to environment variables have no effect](#changes-to-environment-variables-have-no-effect)
+for the recreate step.
+
 ### Requests fail with "model group ... not found"
 
 The model name your client sent isn't in LiteLLM's `model_list`. List what is
@@ -1080,12 +1113,12 @@ Useful markers in a healthy startup: `Application startup complete`, then
 Two ways to run this stack, and they are not interchangeable. Pick by whether
 you are **using** it or **changing** it.
 
-| | Published release | Local clone |
-| --- | --- | --- |
-| Invoke | `npx perfect-ai-stack init` | `npx /path/to/perfect-ai-stack init` |
-| CLI source | npm tarball, pinned to a version | your working tree, live |
-| Gets your edits | no — only on a version bump | yes, immediately |
-| Best for | consuming the stack, stable pins, several machines | editing the stack, testing a fix before it ships |
+|                 | Published release                                  | Local clone                                      |
+| --------------- | -------------------------------------------------- | ------------------------------------------------ |
+| Invoke          | `npx perfect-ai-stack init`                        | `npx /path/to/perfect-ai-stack init`             |
+| CLI source      | npm tarball, pinned to a version                   | your working tree, live                          |
+| Gets your edits | no — only on a version bump                        | yes, immediately                                 |
+| Best for        | consuming the stack, stable pins, several machines | editing the stack, testing a fix before it ships |
 
 `npx <path>` runs `bin/ai-stack.sh` from that directory, so a clone picks up
 uncommitted edits. `npx perfect-ai-stack` resolves the published package; before
@@ -1096,13 +1129,13 @@ the first release only the path form works.
 These are separate, and this is the usual source of "I changed it and nothing
 happened":
 
-| Piece | Lives in | Takes effect |
-| --- | --- | --- |
-| `bin/ai-stack.sh` (the CLI) | your repo / the npm tarball | next run |
-| `litellm` image | built from `litellm/Dockerfile` | after a build + recreate |
-| `lore` image | built from `Dockerfile` | after a build + recreate |
-| `config/litellm.yaml` | **bind-mounted** into the container | after a recreate, not a restart |
-| `.env` / shell exports | read by Compose at container creation | after a recreate |
+| Piece                       | Lives in                              | Takes effect                    |
+| --------------------------- | ------------------------------------- | ------------------------------- |
+| `bin/ai-stack.sh` (the CLI) | your repo / the npm tarball           | next run                        |
+| `litellm` image             | built from `litellm/Dockerfile`       | after a build + recreate        |
+| `lore` image                | built from `Dockerfile`               | after a build + recreate        |
+| `config/litellm.yaml`       | **bind-mounted** into the container   | after a recreate, not a restart |
+| `.env` / shell exports      | read by Compose at container creation | after a recreate                |
 
 So a `config/litellm.yaml` edit is on disk instantly but needs a recreate,
 because LiteLLM reads its model list at startup. A `Dockerfile` edit needs a
@@ -1132,9 +1165,15 @@ sh bin/ai-stack.sh logs
 
 ### Before you commit
 
-The repo's pre-commit hook runs `lat check`. There is one runnable check for the
-wizard's key handling:
+The repo's pre-commit hook runs `lat check`. There is one runnable check for
+the script's non-trivial logic:
 
 ```sh
-sh scripts/check-wizard-keys.sh
+sh scripts/check-ai-stack.sh
 ```
+
+It covers the wizard's API-key detection (including the `OPENAI_API_KEY` alias),
+that the wizard still offers its menu when every key is already exported, and
+that an unavailable model is reported with the right remedy — re-selecting after
+a rename, versus restarting when the config defines the name but the gateway
+hasn't picked it up.
