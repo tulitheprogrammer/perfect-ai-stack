@@ -49,8 +49,6 @@ wizard() {
   # Both API keys are OPTIONAL — a local-only stack (Ollama) needs neither, and
   # nobody needs both. So these checks are informational: they report what the
   # wizard found without ever blocking on a key for a provider you don't use.
-  # Only genuinely-unset keys are offered for entry below, and they can be
-  # skipped at the prompt.
   report_var() {
     local name="$1" alt="$2"
     local val
@@ -73,25 +71,40 @@ wizard() {
   report_var "DEEPSEEK_API_KEY" "OPENAI_API_KEY"
 
   echo ""
+  # The menu is offered even when every key is already set, because `wizard`
+  # means "write me a .env" — exiting early made the command silently do nothing
+  # in exactly the case where the user asked for a file. Keys already exported
+  # are still skipped by prompt_var, so no duplicate lines are written; the
+  # shell export stays the source of truth.
   if [ -z "$MISSING" ]; then
-    echo "  All set. Run: ai-stack start"
-    echo "  (No .env written — keys are already in your environment.)"
-    exit 0
+    echo "  All keys are already set in your environment."
+    echo "  Nothing further is needed — a .env is optional. Continuing in case you"
+    echo "  want one for other variables."
+  else
+    echo "  Not set:$MISSING — both are optional (needed only for Claude / DeepSeek)."
+    echo "  Press Enter to skip any you don't use — a local-only stack needs neither."
   fi
 
-  echo "  Not set:$MISSING — both are optional (needed only for Claude / DeepSeek)."
-  echo "  Press Enter to skip any you don't use — a local-only stack needs neither."
   echo ""
   echo "  1) Print export commands (copy-paste into terminal)"
   echo "  2) Save to .env file (STACK dir, where docker compose auto-loads it)"
   echo "  3) Both"
+  echo "  4) Do nothing — keys are already in my environment"
   echo ""
   # Single-keypress choice: reads one digit, no Enter required.
-  printf "  Choose [1/2/3] (default: 1): "
+  printf "  Choose [1/2/3/4] (default: 1): "
   IFS= read -r -n1 CHOICE_KEY
   echo ""
   # Empty (Enter/EOF) -> default 1.
   CHOICE="${CHOICE_KEY:-1}"
+
+  # 4 = leave the environment alone. Treated as "nothing to do": no file, no
+  # export lines, and a clean message rather than an empty prompt cycle.
+  if [ "$CHOICE" = "4" ]; then
+    echo "  Nothing written — using your environment as-is."
+    echo "  Run: ai-stack start"
+    exit 0
+  fi
 
   case "$CHOICE" in
     2|3)
