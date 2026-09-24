@@ -1074,3 +1074,67 @@ docker compose logs --no-color litellm > /tmp/litellm.log   # capture, then shar
 Useful markers in a healthy startup: `Application startup complete`, then
 `Proxy initialized with Config, Set models: ...` listing your models, and
 `Headroom: N->M tokens` on each request.
+
+## Development
+
+Two ways to run this stack, and they are not interchangeable. Pick by whether
+you are **using** it or **changing** it.
+
+| | Published release | Local clone |
+| --- | --- | --- |
+| Invoke | `npx perfect-ai-stack init` | `npx /path/to/perfect-ai-stack init` |
+| CLI source | npm tarball, pinned to a version | your working tree, live |
+| Gets your edits | no — only on a version bump | yes, immediately |
+| Best for | consuming the stack, stable pins, several machines | editing the stack, testing a fix before it ships |
+
+`npx <path>` runs `bin/ai-stack.sh` from that directory, so a clone picks up
+uncommitted edits. `npx perfect-ai-stack` resolves the published package; before
+the first release only the path form works.
+
+### CLI version vs container version
+
+These are separate, and this is the usual source of "I changed it and nothing
+happened":
+
+| Piece | Lives in | Takes effect |
+| --- | --- | --- |
+| `bin/ai-stack.sh` (the CLI) | your repo / the npm tarball | next run |
+| `litellm` image | built from `litellm/Dockerfile` | after a build + recreate |
+| `lore` image | built from `Dockerfile` | after a build + recreate |
+| `config/litellm.yaml` | **bind-mounted** into the container | after a recreate, not a restart |
+| `.env` / shell exports | read by Compose at container creation | after a recreate |
+
+So a `config/litellm.yaml` edit is on disk instantly but needs a recreate,
+because LiteLLM reads its model list at startup. A `Dockerfile` edit needs a
+full rebuild, since it is baked into the image:
+
+```sh
+git pull
+docker compose build --pull litellm lore
+docker compose up -d --force-recreate
+```
+
+`npx perfect-ai-stack update` runs the build half of that. See
+[Troubleshooting](#troubleshooting) for the recreate-vs-restart distinction.
+
+### Running the CLI without npx
+
+Every command works directly from the clone, which avoids any npx resolution
+question while editing:
+
+```sh
+sh bin/ai-stack.sh init          # from your project
+sh bin/ai-stack.sh wizard
+sh bin/ai-stack.sh logs
+```
+
+`sh bin/ai-stack.sh <cmd>` and `npx perfect-ai-stack <cmd>` behave identically.
+
+### Before you commit
+
+The repo's pre-commit hook runs `lat check`. There is one runnable check for the
+wizard's key handling:
+
+```sh
+sh scripts/check-wizard-keys.sh
+```
