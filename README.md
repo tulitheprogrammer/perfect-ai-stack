@@ -289,6 +289,11 @@ the available list rather than written.
     ministral-3:8b           local
 ```
 
+On an interactive terminal that table is drawn **once**, by the selection menu
+itself (`up/down move, Enter select, q cancel`). The printed block above appears
+only where no menu can run — a pipe, a redirect, or a non-interactive shell — so
+the list is never duplicated and never silently missing.
+
 **`local` vs `remote` is the label that costs money.** Local means Ollama on
 this machine (free per call); remote means a cloud provider that bills per
 token. Choosing a **remote model as the worker is confirmed before writing**,

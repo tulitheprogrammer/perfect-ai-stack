@@ -476,6 +476,16 @@ model_notes() {
 # Selection is per-project, stored in .lore.json (Lore reads model/workerModel
 # from there), so switching needs no gateway restart and does not affect other
 # projects. LORE_WORKER_MODEL stays the global env fallback.
+# Will prompt_available_model show the interactive arrow-key menu?
+#
+# The menu renders the same model table itself (scripts/select-model), so the
+# caller must NOT also print it — that is how the list appeared twice per run.
+# Kept as one predicate because the two decisions have to agree: a mismatch
+# either duplicates the list or hides it entirely.
+menu_supported() {
+  [ -t 0 ] && [ -t 1 ] && command -v bash >/dev/null 2>&1
+}
+
 models() {
   local target="$PWD"
   local cfg="$target/.lore.json"
@@ -526,17 +536,22 @@ models() {
     return 1
   fi
   echo ""
-  echo "  Available models (served by the gateway AND usable now):"
-  local n b note
-  printf '%s\n' "$choices" | while IFS="$(printf '\t')" read -r n b; do
-    [ -n "$n" ] || continue
-    note="$(model_notes "$n")"
-    printf '    %-24s %-7s %s\n' "$n" "$b" "$note"
-  done
-  echo ""
-  echo "  'thinking' is a hint, not a restriction: it costs extra tokens per call,"
-  echo "  which is local and free here. Prefer it when quality matters."
-  echo ""
+  # The list is only printed when the menu will NOT render it. On a terminal the
+  # menu shows the same names/kinds plus a selection cursor, so printing both
+  # made every run show the table twice.
+  if ! menu_supported; then
+    echo "  Available models (served by the gateway AND usable now):"
+    local n b note
+    printf '%s\n' "$choices" | while IFS="$(printf '\t')" read -r n b; do
+      [ -n "$n" ] || continue
+      note="$(model_notes "$n")"
+      printf '    %-24s %-7s %s\n' "$n" "$b" "$note"
+    done
+    echo ""
+    echo "  'thinking' is a hint, not a restriction: it costs extra tokens per call,"
+    echo "  which is local and free here. Prefer it when quality matters."
+    echo ""
+  fi
 
   # Non-interactive: `ai-stack models <session> <worker>` sets directly, but
   # only after validating both against the available list. Writing a name that
@@ -685,9 +700,9 @@ prompt_available_model() {
     return 1
   fi
 
-  # Menu only when we can read single keys. `read -rsn1` needs bash; this script
-  # is run by sh, so probe for bash explicitly and fall back if absent.
-  if [ -t 0 ] && [ -t 1 ] && command -v bash >/dev/null 2>&1; then
+  # Menu only when we can read single keys; see menu_supported for why the
+  # caller's list-printing decision keys off the same predicate.
+  if menu_supported; then
     select_model_menu "$label" "$default" "$options" && return 0
   fi
 

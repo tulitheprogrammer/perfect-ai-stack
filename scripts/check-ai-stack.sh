@@ -126,9 +126,51 @@ else
   echo "  ok   renamed model is not advised to edit the config"
 fi
 
+# ── 4: model list is not duplicated ─────────────────────────────────────────
+
+# The menu renders the model table itself (scripts/select-model), so the printed
+# list must be suppressed exactly when the menu will run. Both decisions read
+# menu_supported(), so this checks the predicate agrees with select-model's own
+# requirements: a tty on stdin AND stdout, plus bash for `read -rsn1`.
+MS=$(sed -n '/^menu_supported()/,/^}$/p' bin/ai-stack.sh)
+[ -n "$MS" ] || { echo "FAIL: could not locate menu_supported"; exit 1; }
+
+dup_case() {
+  # $1=label $2=expected  $3=stdin  $4=stdout  (each: tty|pipe)
+  #
+  # The predicate is `[ -t 0 ] && [ -t 1 ] && bash exists`. Rather than fake a
+  # tty for the pipe cases (which cannot be done reliably from a script), run it
+  # for real under `script` for the tty case, and under redirection for the pipe
+  # cases — then assert the verdict.
+  if [ "$3" = tty ] && [ "$4" = tty ]; then
+    got=$(script -q /dev/null sh -c "printf '%s' 'MENU'
+" >/dev/null 2>&1; \
+          script -q /dev/null sh -c "MS='$MS'; eval \"\$MS\"; menu_supported && echo MENU || echo LIST" 2>/dev/null \
+          | tr -d '\r' | grep -oE 'MENU|LIST' | head -1)
+  else
+    # stdin redirected => [ -t 0 ] is false => LIST, regardless of stdout.
+    got=$(MS="$MS" sh -c 'eval "$MS"; menu_supported && echo MENU || echo LIST' \
+          </dev/null 2>/dev/null | grep -oE 'MENU|LIST' | head -1)
+  fi
+  if [ "$got" = "$2" ]; then
+    printf '  ok   %-30s -> %s\n' "$1" "$got"
+  else
+    printf '  FAIL %-30s -> %s expected %s\n' "$1" "$got" "$2"
+    fails=$((fails + 1))
+  fi
+}
+
+# A real terminal is the case where the list used to appear twice, so the menu
+# must own the list there.
+dup_case "interactive terminal"    MENU  tty  tty
+# No tty on stdin means no menu, so the list MUST still print or the user sees
+# no list at all.
+dup_case "stdin piped"             LIST  pipe pipe
+dup_case "stdin piped, stdout tty" LIST  pipe tty
+
 echo ""
 if [ "$fails" -eq 0 ]; then
-  echo "PASS: wizard keys + menu + model advice (10 cases)"
+  echo "PASS: wizard keys + menu + model advice + list dedup (13 cases)"
 else
   echo "FAIL: $fails case(s)"
   exit 1
