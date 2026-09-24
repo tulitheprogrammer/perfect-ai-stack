@@ -27,13 +27,15 @@ Requires Docker Desktop (see [Prerequisites](#prerequisites)).
 
 `npx` installs the package into npm's cache and runs `bin/ai-stack.sh` from
 there.
-Project files (`lat.md/`, git hooks) always land in the project you run it
-from.
+Project files (`.lore.json`, `lat.md/`, git hooks) always land in the project
+you run it from. The one exception is `.env`, which Compose only reads from the
+stack directory — see [Where to put API keys](#where-to-put-api-keys).
 
 `init` does **not** write a `.env`, and it never prompts — keys are read from
-your shell environment (Docker Compose interpolates them directly). Run
-`npx perfect-ai-stack wizard` separately if you'd rather persist them to a file;
-see [Where to put API keys](#where-to-put-api-keys).
+your shell environment (Docker Compose interpolates them directly). Exporting
+them in your profile is the normal setup and needs no file at all; run
+`npx perfect-ai-stack wizard` if you want one anyway (see
+[Troubleshooting](#troubleshooting) if a key isn't being picked up).
 
 Keep the memory DB and Headroom cache out of the npx cache dir, so they survive upgrades:
 
@@ -183,17 +185,17 @@ configuration docs for the full schema.
 
 ## Commands
 
-| Command                              | What it does                                                            |
-| ------------------------------------ | ----------------------------------------------------------------------- |
-| `npx perfect-ai-stack <cmd>`         | Same as `sh bin/ai-stack.sh <cmd>` — run from any project               |
-| `sh bin/ai-stack.sh init`            | **Start here.** Start gateway + scaffold this project + show IDE config |
-| `sh bin/ai-stack.sh wizard`          | Interactive setup for env vars (only for cloud models)                  |
-| `sh bin/ai-stack.sh start`           | Start the gateway only; also scaffolds lat.md + hook                    |
-| `sh bin/ai-stack.sh stop`            | Stop the gateway                                                        |
-| `sh bin/ai-stack.sh logs`            | Follow logs (all services)                                              |
-| `sh bin/ai-stack.sh ps`              | Show status                                                             |
-| `sh bin/ai-stack.sh update`          | Rebuild LiteLLM (with Headroom) + Lore from latest base images          |
-| `sh bin/ai-stack.sh setup-lat [dir]` | Scaffold lat.md + hook in `[dir]` (default: cwd); runs on `start` too   |
+| Command                              | What it does                                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `npx perfect-ai-stack <cmd>`         | Same as `sh bin/ai-stack.sh <cmd>` — run from any project                                          |
+| `sh bin/ai-stack.sh init`            | **Start here.** Start gateway + scaffold this project + show IDE config                            |
+| `sh bin/ai-stack.sh wizard`          | Prompt for API keys; writes `.env` to the **stack dir** (optional — shell exports work without it) |
+| `sh bin/ai-stack.sh start`           | Start the gateway only; also scaffolds lat.md + hook                                               |
+| `sh bin/ai-stack.sh stop`            | Stop the gateway                                                                                   |
+| `sh bin/ai-stack.sh logs`            | Follow logs (all services)                                                                         |
+| `sh bin/ai-stack.sh ps`              | Show status                                                                                        |
+| `sh bin/ai-stack.sh update`          | Rebuild LiteLLM (with Headroom) + Lore from latest base images                                     |
+| `sh bin/ai-stack.sh setup-lat [dir]` | Scaffold lat.md + hook in `[dir]` (default: cwd); runs on `start` too                              |
 
 ## Model selection
 
@@ -569,18 +571,25 @@ Alternatively, write them to a `.env` file (gitignored). Note where it has to
 go: **Compose only auto-loads `.env` from the stack directory**, not from the
 project you run `init` in. A template with every supported variable (zero
 secrets) is committed as [`.env.example.md`](.env.example.md) — copy it to
-`.env` in the stack dir and adjust. The wizard (`ai-stack wizard`) can generate
-it for you:
+`.env` in the stack dir and adjust. The wizard (`ai-stack wizard`) also writes
+one for you:
 
 ```sh
 DEEPSEEK_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+The wizard always shows its menu, even when every key is already exported —
+but a key it finds in your environment is never copied into the file, so running
+it can't create a duplicate you then have to keep in sync. Choose `4` to get out
+without writing anything.
+
 Use `.env` when you want values that differ per stack checkout, or keys you
 don't want in your shell profile. Don't override the `LORE_*` variables unless
 you need to — the defaults (shown in `.env.example.md`) point Lore at LiteLLM,
-and that's where you want it (see the stale-env warning in Quick start).
+and that's where you want it. Overriding them while the containers are running is
+the classic "my changes did nothing" trap; see
+[Troubleshooting](#troubleshooting).
 
 ### LiteLLM
 
@@ -933,3 +942,135 @@ Check it works:
 ```sh
 docker compose logs litellm | grep Headroom   # per-request "Headroom: N->M tokens" lines
 ```
+
+## Troubleshooting
+
+### The stack works, but requests return 401
+
+Almost always the API key: LiteLLM has a registered model but no usable
+credential for the provider, so it forwards an empty key and the provider
+rejects it. The error reaches you as, from Lore:
+
+```
+[lore] upstream error: 401 {"error":{"message":"... Authentication Fails (governor)"}}
+```
+
+or, direct to LiteLLM:
+
+```
+litellm.AuthenticationError: AuthError - DeepseekException - Authentication Fails (governor)
+```
+
+**Check the key actually reached the container** — this is the diagnostic that
+matters, because it distinguishes "not exported" from "exported but not passed
+through":
+
+```sh
+docker exec ai-litellm printenv DEEPSEEK_API_KEY | cut -c1-6
+```
+
+A key prefix means the container has it; empty means it doesn't. A blank result
+has two causes:
+
+1. **Not exported in the shell you ran the stack from.** `docker compose`
+   interpolates from the invoking shell, so a key defined in a config file your
+   shell didn't load isn't visible. Verify with
+   `echo "${DEEPSEEK_API_KEY:+set}"`, and re-run from a fresh terminal.
+2. **Exported, but the container predates the export.** Compose bakes env vars
+   in at container creation; a plain `restart` reuses the old environment.
+   Recreate instead:
+
+   ```sh
+   cd /path/to/perfect-ai-stack
+   docker compose up -d --force-recreate litellm
+   ```
+
+`DEEPSEEK_API_KEY` is the canonical name; `OPENAI_API_KEY` works as a fallback
+(both are set in `docker-compose.yml`, each falling back to the other). If you
+set the value in `.env` rather than your shell, confirm it lives in the **stack**
+directory — Compose ignores a `.env` next to `docker-compose.yml`'s project
+clone but not in the directory you ran `init` from.
+
+### `ANTHROPIC_API_KEY` variable is not set
+
+```
+WARN[0000] The "ANTHROPIC_API_KEY" variable is not set. Defaulting to a blank string.
+```
+
+Expected and harmless unless you use `claude-*` models. It's Compose
+interpolating an unset optional variable at startup. Set it, or ignore it.
+
+### Changes to environment variables have no effect
+
+Compose reads `${VAR}` when it **creates** a container. Editing `.env` or
+re-exporting a variable does nothing to a container that is already running.
+Recreate the affected service:
+
+```sh
+docker compose up -d --force-recreate litellm
+```
+
+If `docker compose up -d` prints `Container ai-litellm  Running` rather than
+`Recreated`, it kept the existing container — that output is your cue to add
+`--force-recreate`.
+
+### Requests fail with "model group ... not found"
+
+The model name your client sent isn't in LiteLLM's `model_list`. List what is
+actually served:
+
+```sh
+curl -s http://localhost:3207/v1/models
+```
+
+Names come from `config/litellm.yaml` (mounted at `/app/config.yaml`). After
+editing it, recreate the container as above — the file is mounted, but the model
+list is read at startup.
+
+### Reply comes back with empty `content`
+
+`deepseek-flash` is a reasoning model: it spends tokens on `reasoning_content`
+before writing `content`. A low `max_tokens` is consumed entirely by reasoning,
+giving `content: ""` and `finish_reason: "length"`. Raise `max_tokens` and retry.
+This is a property of the model and the budget, not a stack fault.
+
+### `could not determine project for session ... falling back to process.cwd()`
+
+```
+[lore] warning: could not determine project for session ... — falling back to process.cwd() (/app)
+```
+
+Lore can't tell which project a session belongs to, so memory may be
+misattributed. Fix by launching your agent through `lore run`, or by having the
+client send an `X-Lore-Project: /path/to/project` header (for Claude Code,
+`ANTHROPIC_CUSTOM_HEADERS`). Harmless in a single-project stack.
+
+### Recall degrades to keyword search only
+
+```
+LocalProviderUnavailableError: '@huggingface/transformers' failed to initialize.
+Recall will use FTS-only search.
+```
+
+The local embedding provider is missing. The image installs it
+(`Dockerfile`), so this means a stale image — rebuild:
+
+```sh
+npx perfect-ai-stack update
+```
+
+Related: the gateway's embedding model needs shared memory, so `shm_size` is
+raised to 1GB in `docker-compose.yml`. Lowering it can push the WASM fallback
+into an out-of-memory crash.
+
+### Seeing what's happening
+
+```sh
+npx perfect-ai-stack logs                  # follow everything
+npx perfect-ai-stack logs litellm          # one service
+docker compose logs --no-color litellm > /tmp/litellm.log   # capture, then share
+```
+
+Useful markers in a healthy startup: `Application startup complete`, then
+`Proxy initialized with Config, Set models: ...` listing your models, and
+`Headroom: N->M tokens` on each request.
