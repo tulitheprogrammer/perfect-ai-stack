@@ -20,6 +20,13 @@ done
 DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 CMD="${1:-help}"
 
+# The shipped default model, used for onboarding, --reset, and as the fallback
+# shown when no selection is stored. Must exist as a model_name in
+# config/litellm.yaml and be pulled in Ollama for a fresh machine to work with no
+# setup. Kept in one place because it appeared in seven spots that had to agree;
+# changing it should be a one-line edit.
+DEFAULT_MODEL="qwen3:8b"
+
 wizard() {
   # `read`/`read -n1` fail on non-TTY stdin (EOF), and under `set -e` that
   # kills the wizard silently mid-flow. Fail loudly instead.
@@ -369,17 +376,17 @@ choose_models() {
     fi
 
     local session worker
-    if model_is_available "qwen3:8b" && model_is_local "qwen3:8b"; then
-      session="qwen3:8b"; worker="qwen3:8b"
+    if model_is_available "$DEFAULT_MODEL" && model_is_local "$DEFAULT_MODEL"; then
+      session="$DEFAULT_MODEL"; worker="$DEFAULT_MODEL"
     else
-      # Prefer any local model; qwen3:8b is only the shipped favourite.
+      # Prefer any local model; DEFAULT_MODEL is only the shipped favourite.
       worker="$(available_models | awk -F'\t' '$2=="local" {print $1; exit}')"
       session="$worker"
     fi
 
     if [ -z "$worker" ]; then
       echo "  Models: none available yet — no .lore.json written."
-      echo "  Start Ollama and pull a model, then re-run:  ollama pull qwen3:8b"
+      echo "  Start Ollama and pull a model, then re-run:  ollama pull $DEFAULT_MODEL"
       return 0
     fi
     echo "  Models: defaults ($session session + worker, curator off)"
@@ -499,7 +506,7 @@ models() {
 
   case "${1:-}" in
     --reset)
-      write_model_choice "$target" "qwen3:8b" "qwen3:8b"
+      write_model_choice "$target" "$DEFAULT_MODEL" "$DEFAULT_MODEL"
       return 0
       ;;
     --curator)
@@ -513,6 +520,26 @@ models() {
   esac
 
   # No arguments: show the current state, then offer to change it.
+  #
+  # With no usable selection, persist the defaults FIRST so the state shown below
+  # is literally what is on disk. Without this the display fell back to a
+  # hardcoded name that was never written, so "Current selection" could name a
+  # model .lore.json did not contain — and a later plain `models` run showed the
+  # fallback again, as if nothing had been saved.
+  if [ -z "${1:-}" ] && [ ! -f "$cfg" ]; then
+    local d_s d_w
+    if model_is_available "$DEFAULT_MODEL" && model_is_local "$DEFAULT_MODEL"; then
+      d_s="$DEFAULT_MODEL"; d_w="$DEFAULT_MODEL"
+    else
+      # Prefer any local model; DEFAULT_MODEL is only the shipped favourite.
+      d_w="$(available_models | awk -F'\t' '$2=="local" {print $1; exit}')"
+      d_s="$d_w"
+    fi
+    if [ -n "$d_w" ]; then
+      write_model_choice "$target" "$d_s" "$d_w" >/dev/null
+    fi
+  fi
+
   if [ -z "${1:-}" ]; then
     show_model_state "$cfg"
     if [ ! -t 0 ]; then
@@ -593,8 +620,8 @@ models() {
   # model, and only fall back to whatever exists if there is no local at all.
   [ -n "$cur_s" ] || cur_s="$(avail_names | head -1)"
   if [ -z "$cur_w" ] || ! model_is_local "$cur_w"; then
-    if model_is_available "qwen3:8b" && model_is_local "qwen3:8b"; then
-      cur_w="qwen3:8b"
+    if model_is_available "$DEFAULT_MODEL" && model_is_local "$DEFAULT_MODEL"; then
+      cur_w="$DEFAULT_MODEL"
     else
       cur_w="$(available_models | awk -F'\t' '$2=="local" {print $1; exit}')"
       [ -n "$cur_w" ] || cur_w="$cur_s"
@@ -604,7 +631,7 @@ models() {
   local session worker
   prompt_available_model "  Session model" "$cur_s" "any" && session="$REPLY" || return 1
   echo "  Worker runs on every session (distillation/curation). Keep it LOCAL and"
-  echo "  free: qwen3:8b is the measured-best local model (scripts/eval-worker.sh)."
+  echo "  free: $DEFAULT_MODEL is the measured-best local model (scripts/eval-worker.sh)."
   prompt_available_model "  Worker model " "$cur_w" "local" && worker="$REPLY" || return 1
 
   check_same_protocol "$session" "$worker" || return 1
@@ -695,7 +722,7 @@ prompt_available_model() {
     echo ""
     echo "  Fix one of:"
     echo "    - start Ollama:      ollama serve"
-    echo "    - pull a model:      ollama pull qwen3:8b"
+    echo "    - pull a model:      ollama pull $DEFAULT_MODEL"
     echo "    - allow a remote worker on purpose: ai-stack models --yes <session> <remote>"
     return 1
   fi
@@ -837,7 +864,7 @@ show_model_state() {
   echo "  Current selection ($cfg):"
   local note
   note="$(model_notes "$s")"
-  echo "    session: ${s:-qwen3:8b (env default)}${note:+   ($note)}"
+  echo "    session: ${s:-$DEFAULT_MODEL (env default)}${note:+   ($note)}"
   note="$(model_notes "$w")"
   echo "    worker:  ${w:-$s (follows session)}${note:+   ($note)}"
   # Keep the cost of a remote worker visible after the fact: it bills on every
@@ -1009,7 +1036,7 @@ wait_for_gateway() {
 print_client_config() {
   local cfg="$PWD/.lore.json"
   local s w
-  s="$(read_model_field "$cfg" model)"; [ -n "$s" ] || s="qwen3:8b"
+  s="$(read_model_field "$cfg" model)"; [ -n "$s" ] || s="$DEFAULT_MODEL"
   w="$(read_model_field "$cfg" workerModel)"
 
   echo ""

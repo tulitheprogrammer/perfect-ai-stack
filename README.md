@@ -204,7 +204,7 @@ Selection is **per project**, stored in `.lore.json` at your project root, so
 switching models needs no restart and doesn't affect other projects.
 
 ```sh
-npx perfect-ai-stack models                              # list + pick interactively
+npx perfect-ai-stack models                              # show current + change
 npx perfect-ai-stack models qwen3:8b ministral-3:8b   # session, then worker
 ```
 
@@ -216,6 +216,12 @@ That writes `.lore.json`:
   "workerModel": { "providerID": "openai", "modelID": "ministral-3:8b" }
 }
 ```
+
+With no selection stored yet, a bare `models` writes the defaults (`qwen3:8b` for
+both) before printing them, so what it reports as the current selection is always
+what `.lore.json` actually contains. An **existing** selection is never
+overwritten by that — only `models <session> [worker]`, `--reset`, or the
+interactive menu change it. `--reset` restores the default pair.
 
 - **session** — the model your IDE chat uses.
 - **worker** — distillation, curation, query expansion (background, async).

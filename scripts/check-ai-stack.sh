@@ -168,9 +168,74 @@ dup_case "interactive terminal"    MENU  tty  tty
 dup_case "stdin piped"             LIST  pipe pipe
 dup_case "stdin piped, stdout tty" LIST  pipe tty
 
+# ── 5: the default model is defined once ────────────────────────────────────
+
+# It used to appear as a literal in seven places that had to agree by hand.
+# Assert one definition and no stray literals in code (comments may name it).
+n=$(grep -cE '^DEFAULT_MODEL=' bin/ai-stack.sh)
+if [ "$n" -eq 1 ]; then
+  echo "  ok   DEFAULT_MODEL defined once"
+else
+  echo "  FAIL DEFAULT_MODEL defined $n times (expected 1)"
+  fails=$((fails + 1))
+fi
+
+# Code lines (not comments) that still hardcode the default model name.
+# show_models_help is exempt: it prints usage EXAMPLES, where a concrete model
+# name is the point, and the example need not track the default.
+default_name=$(sed -n 's/^DEFAULT_MODEL="\(.*\)"$/\1/p' bin/ai-stack.sh)
+help_start=$(grep -n '^show_models_help()' bin/ai-stack.sh | cut -d: -f1)
+help_end=$(awk -v s="$help_start" 'NR>s && /^}$/ {print NR; exit}' bin/ai-stack.sh)
+stray=$(grep -nE "^[[:space:]]*[^#]*'?\"?${default_name}" bin/ai-stack.sh \
+  | grep -v '^[0-9]*:DEFAULT_MODEL=' \
+  | awk -F: -v a="$help_start" -v b="$help_end" '!($1 >= a && $1 <= b)' || true)
+if [ -z "$stray" ]; then
+  echo "  ok   no code path hardcodes the default model name"
+else
+  echo "  FAIL default model name still hardcoded in code:"
+  printf '%s\n' "$stray" | sed 's/^/         /'
+  fails=$((fails + 1))
+fi
+
+# ── 6: models writes the defaults, without clobbering a real selection ──────
+
+# The display used to show a fallback name that was never persisted, so
+# "Current selection" could name a model .lore.json did not contain.
+case_tmp=$(mktemp -d)
+trap 'rm -rf "$case_tmp"' EXIT
+STACK_SH="$(pwd)/bin/ai-stack.sh"
+
+( cd "$case_tmp" && sh "$STACK_SH" models >/dev/null 2>&1 </dev/null || true )
+if [ -f "$case_tmp/.lore.json" ]; then
+  echo "  ok   no .lore.json -> defaults written"
+else
+  # Only fail if the gateway is up; with it down there is no model list and
+  # writing nothing is the documented outcome.
+  if curl -sf -o /dev/null --max-time 3 http://localhost:3207/v1/models 2>/dev/null; then
+    echo "  FAIL gateway is up but models wrote no .lore.json"
+    fails=$((fails + 1))
+  else
+    echo "  skip gateway down — defaults not written by design"
+  fi
+fi
+
+# An existing selection must survive a bare `models` run (the guard is
+# [ ! -f "$cfg" ]); clobbering it would silently undo the user's choice.
+if [ -f "$case_tmp/.lore.json" ]; then
+  printf '{\n  "model":{"providerID":"openai","modelID":"deepseek-flash"},\n  "workerModel":{"providerID":"openai","modelID":"ministral-3:8b"},\n  "curator":{"enabled":false}\n}\n' \
+    > "$case_tmp/.lore.json"
+  ( cd "$case_tmp" && sh "$STACK_SH" models >/dev/null 2>&1 </dev/null || true )
+  if grep -q 'deepseek-flash' "$case_tmp/.lore.json"; then
+    echo "  ok   existing selection survives a bare models run"
+  else
+    echo "  FAIL bare models overwrote an existing selection"
+    fails=$((fails + 1))
+  fi
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then
-  echo "PASS: wizard keys + menu + model advice + list dedup (13 cases)"
+  echo "PASS: wizard keys + menu + model advice + list dedup + defaults (17 cases)"
 else
   echo "FAIL: $fails case(s)"
   exit 1
