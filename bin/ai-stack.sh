@@ -337,7 +337,9 @@ init() {
     export AI_STACK_PROJECT_DIR="${AI_STACK_PROJECT_DIR:-$target}"
     # The gateway is shared across projects: start it from the stack dir (docker
     # compose only reads .env and the compose file from there), then scaffold
-    # the caller's project. Project files never land in the stack dir.
+    # the caller's project. init() writes no file into the stack dir — the one
+    # exception in this script is the wizard's .env, which must live there to be
+    # read at all.
     ( cd "$DIR" && start_stack )
   fi
 
