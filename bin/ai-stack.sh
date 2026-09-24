@@ -479,16 +479,23 @@ model_protocol() {
 
 # Advisory note shown next to a model. Purely informational: it never filters
 # the list, because thinking mode is not a reliable quality proxy. Measured on
-# the curation eval, the thinking `qwen3:8b` classified facts correctly while
-# the non-thinking `ministral-3:8b` did not — so excluding thinking models
-# would have removed the better worker.
+# the curation eval, `qwen3:8b` classified facts correctly while the
+# non-thinking `ministral-3:8b` did not — so excluding thinking models would
+# have removed the better worker.
+#
+# `qwen3:8b` is deliberately NOT listed here even though its name says
+# otherwise: config/litellm.yaml pins `think: false` on it (thinking makes the
+# worker return empty content — see the check in scripts/check-ai-stack.sh), so
+# it does not spend reasoning tokens and the note would be false. What remains
+# matches models the stack does not configure, i.e. ones a user added, which do
+# reason by default.
 #
 # Name-based heuristic on purpose: neither /v1/models nor Ollama's tags expose
-# a reasoning capability flag. Being wrong here only mislabels a hint.
+# a reasoning capability flag, and this cannot read config/litellm.yaml.
 model_notes() {
   local m="$1"
   case "$m" in
-    qwen3*|*qwq*|*deepseek-r1*|*reasoner*) printf 'thinking: more tokens per call' ;;
+    *qwq*|*deepseek-r1*|*reasoner*) printf 'thinking: more tokens per call' ;;
     *) printf '' ;;
   esac
 }
@@ -596,8 +603,10 @@ models() {
       printf '    %-24s %-7s %s\n' "$n" "$b" "$note"
     done
     echo ""
-    echo "  'thinking' is a hint, not a restriction: it costs extra tokens per call,"
-    echo "  which is local and free here. Prefer it when quality matters."
+    echo "  'thinking' is a hint, not a restriction: for models you add yourself it"
+    echo "  costs extra tokens per call. The shipped $DEFAULT_MODEL has thinking"
+    echo "  disabled (see config/litellm.yaml), because with it on the worker returns"
+    echo "  empty content and distillation silently stops."
     echo ""
   fi
 

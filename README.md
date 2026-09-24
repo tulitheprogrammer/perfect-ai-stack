@@ -116,11 +116,15 @@ confirm, then check the log for `POST /v1/chat/completions ... 200`:
 cd /path/to/perfect-ai-stack && docker compose logs litellm --tail 5
 ```
 
-> **Heads up: `qwen3:8b` is a _thinking_ model.** It writes its reasoning first,
-> so on a short `max_tokens` (anything under a few hundred) you get `200 OK`
-> with **empty content** — the budget was spent on reasoning. If a reply comes
-> back blank, raise `max_tokens` in your client, or prefix the message with
-> `/no_think` to skip reasoning. Your IDE's default limit is usually fine.
+> **Heads up on the default worker, `qwen3:8b`.** It is a _thinking_ model, which
+> through LiteLLM is a trap: Ollama reports the reasoning trace on a channel
+> LiteLLM drops, so a reply that spends its budget thinking arrives as `200 OK`
+> with **empty content**. Background distillation then fails silently
+> (`worker empty response` / `lore-distill failed (no-response)`). The stack
+> therefore pins `think: false` on it in `config/litellm.yaml`, so it answers
+> directly and this cannot happen. A thinking model you add yourself needs the
+> same treatment — for the **worker**, raising `max_tokens` does not help, since
+> Lore sets the worker's limit itself.
 
 That's it — you're running. Optional next steps: [choose your models](#model-selection),
 wire up the [knowledge graph over MCP](#knowledge-graph-access-mcp), or read
@@ -268,7 +272,7 @@ Interactive runs use an **arrow-key menu** (up/down to move, Enter to select,
 
 ```
   Worker model :
-  > qwen3:8b                 local    thinking: more tokens
+  > qwen3:8b                 local
     ministral-3:8b           local
   up/down move   Enter select   q cancel
 ```
@@ -291,7 +295,7 @@ the available list rather than written.
   Available models (served by the gateway AND usable now):
     deepseek-flash        remote
     deepseek-v4-pro          remote
-    qwen3:8b                 local   thinking: more tokens per call
+    qwen3:8b                 local
     ministral-3:8b           local
 ```
 
@@ -325,13 +329,13 @@ indistinguishable from a free one.
 Remote _is_ the right call when your local model cannot curate well — a cheap
 cloud worker beats a small local one, and Lore's curation floor is 32B+.
 
-`thinking` is a **hint, not a filter.** Thinking models spend tokens reasoning
-before answering, which costs time per worker call — but it is local and free,
-and the worker is async. It is also not a quality signal: on the measured eval
-the thinking `qwen3:8b` classified facts correctly while the non-thinking
-`ministral-3:8b` did not, so excluding thinking models would have removed the
-better worker. The label is derived from the model name (no capability flag
-exists in `/v1/models` or Ollama's tags), so treat it as a rough hint.
+`thinking` is a **hint, not a filter**, and it appears only for models the
+stack does not configure (anything you add yourself that reasons by default).
+The one local model whose name suggests reasoning, `qwen3:8b`, is pinned to
+`think: false` in `config/litellm.yaml` — thinking made it return empty content
+through LiteLLM — so it is not labelled. The label is derived from the model
+name (no capability flag exists in `/v1/models` or Ollama's tags), so treat it
+as a rough hint either way.
 
 **Session and worker must share one API protocol.** Workers call with the
 session's transport, so a mixed pair (e.g. an Anthropic session with an
@@ -389,12 +393,15 @@ actually chat — distillation after each segment, curation on idle, query
 expansion per recall. Point it at a cloud model and you pay on every session.
 Point it at Ollama and that cost is zero.
 
-**Thinking models cost more per worker call, but don't hurt quality.** `qwen3:8b`
-emits reasoning before content, so a short `max_tokens` returns 200 with empty
-content, and every background call spends tokens reasoning about a
-summarization task. That is a **token-cost** issue, not an accuracy one —
-measured below, it produced correct categories with no duplicates. `/no_think`
-is not a fix, since the worker builds its own prompts.
+**Thinking models must not be the worker, unless you disable thinking.** `qwen3:8b`
+emits reasoning before content; Ollama reports that on a separate channel and
+LiteLLM drops it, so a call that spends its budget thinking returns `200 OK`
+with **empty content** and the worker logs `no-response`. That is a
+**correctness** problem, not just token cost: distillation silently stops
+writing anything. `config/litellm.yaml` pins `think: false` on the shipped
+`qwen3:8b` entry, so the default is safe. A thinking model you add yourself
+needs the same treatment — `/no_think` is not a fix, since the worker builds
+its own prompts.
 
 ### Which local model to use (measured)
 
@@ -419,8 +426,15 @@ than sampling noise. A wrong category in a committed `.lore.md` is exactly the
 review burden Lore warns about.
 
 `qwen3:8b` classified all four facts correctly and kept the reason ("duplicate
-lockfiles") in the content. Its cost is thinking tokens, which are local and
-free.
+lockfiles") in the content. Its `think: false` setting is why it is usable as
+the worker at all: with thinking on, the reasoning trace consumed the response
+and the caller got empty content.
+
+The scores above were judged by hand. Re-scored mechanically (does each fact
+appear, and with a defensible category?) the `think: false` setting costs one
+label: the auth/billing rule comes back as `pattern` rather than
+`architecture`. Every entry is still captured, valid JSON, no duplicates — and
+that is a far smaller cost than distillation silently stopping.
 
 ### Compare models yourself
 
@@ -438,9 +452,9 @@ for: valid JSON, correct categories, no duplicate titles, and no invented
 facts. A wrong category is the failure to watch for most closely: it is the one
 that silently corrupts a committed file while looking perfectly well-formed.
 
-This is the recommended shape: **thinking-capable model for the session, local
-model for the worker**. It works because both route through LiteLLM on the same
-protocol — see [All models route through LiteLLM](#all-models-route-through-litellm).
+This is the recommended shape: **remote model for the session, local model for
+the worker**. It works because both route through LiteLLM on the same protocol —
+see [All models route through LiteLLM](#all-models-route-through-litellm).
 
 A real run's output (model `qwen3:8b`, reformatted from one line):
 
@@ -1159,6 +1173,37 @@ cd /path/to/perfect-ai-stack && docker compose up -d --force-recreate lore
 
 Note `init` warns when the running gateway is mounted to a different project;
 if you saw that warning and ignored it, this is the consequence.
+
+### Distillation is running but nothing is being learned (`worker empty response`)
+
+```
+[lore] WARN: worker empty response (HTTP 200, ct=application/json) — model=openai/qwen3:8b
+      worker=lore-distill ... finish_reason=stop ... completion_tokens:342
+[lore] WARN: [worker-health] lore-distill failed (no-response)
+```
+
+A `200 OK` with `finish_reason=stop` and **empty content** looks healthy but
+means nothing was distilled: `.lore.md` never grows and recall degrades, with no
+error the user ever sees.
+
+Cause: the worker is a **thinking** model. Ollama reports the reasoning trace on
+a separate `reasoning` channel, LiteLLM reads only `thinking`, so when thinking
+consumes the response budget the content arrives empty. Raising `max_tokens`
+here does **not** help — Lore's worker sets its own limit, so a floor in
+`config/litellm.yaml` is ignored (tested: content still came back empty). The
+fix is to disable thinking on that model's entry in `config/litellm.yaml`:
+
+```yaml
+- model_name: qwen3:8b
+  litellm_params:
+    model: ollama/qwen3:8b
+    api_base: http://host.docker.internal:11434
+    think: false
+```
+
+Then recreate LiteLLM (`docker compose up -d --force-recreate litellm`); the
+config is mounted, so a restart is not enough. The shipped `qwen3:8b` entry
+already has this, so you only hit it with a thinking model you added yourself.
 
 ### Requests fail with "model group ... not found"
 

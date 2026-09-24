@@ -45,14 +45,38 @@ model_list:
   # Measured on the curation eval (scripts/eval-worker.sh) — see README.
   #
   # qwen3:8b classified all four test facts correctly across three runs, with
-  # no duplicate titles. It is a THINKING model, so a short max_tokens returns
-  # 200 with empty content and every worker call spends tokens on reasoning —
-  # but that is local token cost, not a quality problem. Used for both session
-  # and worker by default.
+  # no duplicate titles, so it is the default worker.
+  #
+  # It is a THINKING model, and that breaks the worker through LiteLLM.
+  # Ollama puts the reasoning trace on a separate `reasoning` channel; LiteLLM's
+  # ollama provider only reads `thinking`, so it drops the trace and, when the
+  # thinking budget consumes the whole response, the caller gets HTTP 200 with
+  # finish_reason=stop and content: "". Lore's worker then logs
+  #   worker empty response ... finish_reason=stop ... completion_tokens:342
+  # and "lore-distill failed (no-response)" — distillation silently stops
+  # writing anything, with no error the user ever sees.
+  #
+  # `think: false` fixes it at the source: the model answers directly, so there
+  # is no channel to drop and no way for thinking to eat the budget. Verified
+  # against a thinking-inducing prompt: 729 chars of valid JSON vs 0.
+  #
+  # It is a small quality trade, measured (3 runs each, same eval conversation):
+  # thinking ON captured one more fact's category (call the auth/billing rule
+  # `architecture` rather than `pattern`), and thinking OFF keeps the same
+  # entries with no duplicates. Both output valid JSON. That is worth paying to
+  # stop silent data loss, and a larger max_tokens is NOT an alternative: Lore's
+  # worker sets its own limit, so a max_tokens floor here is ignored (tested —
+  # content still came back empty).
+  #
+  # This applies to the session path too, so qwen3:8b as a SESSION model answers
+  # without chain-of-thought. To get a thinking session model back, copy this
+  # block under a new model_name and drop the `think:` line — but then keep it
+  # away from the WORKER, which is where the empty-content bug bites.
   - model_name: qwen3:8b
     litellm_params:
       model: ollama/qwen3:8b
       api_base: http://host.docker.internal:11434
+      think: false
     model_info:
       input_cost_per_token: 0
       output_cost_per_token: 0

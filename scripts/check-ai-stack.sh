@@ -298,9 +298,44 @@ else
   fails=$((fails + 1))
 fi
 
+# ── 8: the worker can actually answer ─────────────────────────────────────
+
+# qwen3:8b is a thinking model, and LiteLLM drops Ollama's reasoning channel:
+# when thinking consumes the response the caller gets HTTP 200 with
+# finish_reason=stop and content:"", which Lore logs as
+#   worker empty response ... finish_reason=stop
+# and "lore-distill failed (no-response)" — distillation stops silently, with
+# no error the user ever sees. config/litellm.yaml pins `think: false` on the
+# qwen3:8b entry to prevent exactly that.
+#
+# A prompt that invites long deliberation is what makes the difference, so that
+# is what this sends: with thinking disabled the model answers inside the
+# budget; with it enabled the same budget is spent thinking and content comes
+# back empty. Asserting non-empty content is enough to catch a removed
+# `think: false`, and it is the real request path (gateway -> LiteLLM ->
+# Ollama), not a grep of the config.
+#
+# Skipped when the gateway is down — there is nothing to ask, the same rule the
+# defaults check above uses.
+if curl -sf -o /dev/null --max-time 3 http://localhost:3207/v1/models 2>/dev/null; then
+  payload='{"model":"qwen3:8b","max_tokens":250,"temperature":0,"messages":[{"role":"system","content":"Think step by step about each fact at length, weighing alternatives and explaining your reasoning in detail. Then return ONLY a JSON array."},{"role":"user","content":"User: We switched from npm to pnpm; npm created duplicate lockfiles.\nAssistant: Understood.\nUser: The auth service must never talk to the billing DB directly, only through the gateway.\nAssistant: Noted."}]}'
+  resp=$(curl -s --max-time 180 -X POST http://localhost:3207/v1/chat/completions \
+    -H 'content-type: application/json' -H 'authorization: Bearer sk-check' \
+    -d "$payload" 2>/dev/null || true)
+  if printf '%s' "$resp" | grep -q '"content":"[^"]'; then
+    echo "  ok   qwen3:8b answers with non-empty content (thinking disabled)"
+  else
+    echo "  FAIL qwen3:8b returned empty content — worker would log 'no-response'"
+    printf '%s\n' "$resp" | cut -c1-200 | sed 's/^/         /'
+    fails=$((fails + 1))
+  fi
+else
+  echo "  skip gateway down — the worker answer check needs the gateway"
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then
-  echo "PASS: wizard keys + menu + model advice + list dedup + defaults + shared worker (21 cases)"
+  echo "PASS: wizard keys + menu + model advice + list dedup + defaults + shared worker + mount + worker answer (24 cases)"
 else
   echo "FAIL: $fails case(s)"
   exit 1
