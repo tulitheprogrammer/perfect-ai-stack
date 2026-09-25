@@ -4,3 +4,8 @@ node_modules/
 lat.md/.cache/
 lat.md/node_modules/
 data/
+
+# A 0-byte .lore.json is what `ai-stack init` leaves when run from the STACK
+# dir (which is not a project). Lore then reads an empty config and falls back
+# to a hardcoded anthropic model it cannot serve. Never commit one.
+/.lore.json
