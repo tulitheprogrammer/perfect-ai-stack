@@ -983,22 +983,72 @@ set_curator() {
   esac
 }
 
+# Write the shared model config the container reads at /app/.lore.json.
+#
+# This is the FALLBACK channel, not the primary one. The worker resolver checks
+# LORE_WORKER_MODEL first and returns before the config is consulted (see
+# write_shared_worker below for the disassembly); the config matters for the
+# SESSION model, which has no environment variable of its own and otherwise takes
+# a hardcoded `anthropic/claude-sonnet-4-6` default this stack cannot serve:
+#
+#   Xe().model ?? { providerID: "anthropic", modelID: "claude-sonnet-4-6" }
+#
+# docker-compose.yml bind-mounts this file read-only at /app/.lore.json. One
+# container mounts one directory at /app, so a per-project file can only describe
+# the mounted project; a single mounted file is what spans every project.
+#
+# Unlike ${VAR} in .env (baked by Compose at container creation), an edit here is
+# picked up on the next request — no recreate.
+#
+# Mirrors the shape the gateway parses: model/workerModel as {providerID, modelID},
+# both "openai" because every model here is reached through LiteLLM over the
+# OpenAI protocol.
+write_shared_config() {
+  local session="$1" worker="$2"
+  local f="$DIR/config/lore.json"
+  [ -n "$session" ] || return 0
+
+  node -e '
+    const fs = require("fs");
+    const [path, session, worker] = process.argv.slice(1);
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path, "utf8")); } catch {}
+    cfg.model = { providerID: "openai", modelID: session };
+    if (worker) cfg.workerModel = { providerID: "openai", modelID: worker };
+    if (!cfg.curator) cfg.curator = { enabled: false };
+    fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+  ' "$f" "$session" "$worker" || { echo "  failed to write $f"; return 1; }
+
+  echo "  Wrote $f (shared: applies to every project, read at /app/.lore.json)"
+}
+
 # Persist the chosen worker model to the STACK .env as LORE_WORKER_MODEL, so it
 # applies to every project on this machine rather than only the one whose
 # .lore.json Lore happens to be mounted to.
 #
-# Why this and not .lore.json: Lore resolves the worker model in this order
-# (packages/gateway/src/worker-model.ts):
-#   1. LORE_WORKER_MODEL env  - returned before the config file is even read
-#   2. .lore.json workerModel - read from join(projectDir, ".lore.json")
-#   3. cost-aware default     - cheaper same-family model when the session is
-#                               expensive
-#   4. session model / provider default
-# Rung 2 needs the project directory to be the one Lore was mounted with, and
-# one container can only have one /app. So with a shared gateway, .lore.json's
-# worker field is invisible for every project except the mounted one, while the
-# env var is the only channel that actually spans projects. Session model is
-# genuinely per-project and stays in .lore.json.
+# Why this and not .lore.json: read from the pinned gateway bundle, the worker
+# resolver checks the ENV FIRST and returns immediately:
+#
+#   function $be(e) {                      // "openai/qwen3:8b" -> {providerID, modelID}
+#     if (!e) return;
+#     let t = e.indexOf("/");
+#     return t > 0 ? { providerID: e.slice(0,t), modelID: e.slice(t+1) }
+#                  : { providerID: "anthropic", modelID: e };   // NO SLASH -> anthropic!
+#   }
+#   function ea(e) {
+#     let t = $be(process.env.LORE_WORKER_MODEL);
+#     if (t) return t;                     // env wins, config never read
+#     let r = Xe(), ...                    // config (.lore.json) is the fallback
+#   }
+#
+# Rung 2 needs the project directory to be the one Lore was mounted with, and one
+# container can only have one /app, so .lore.json's worker field is invisible for
+# every project except the mounted one. The env var is the channel that spans
+# projects, which is why this writes it.
+#
+# The `/` is load-bearing: a value with no slash is read as an ANTHROPIC model
+# (see $be above), which against this stack's LiteLLM 400s on /v1/messages. Keep
+# the `openai/` prefix on every value written here.
 write_shared_worker() {
   local worker="$1" project="${2:-$PWD}"
   local env_file="$DIR/.env"
@@ -1079,6 +1129,12 @@ write_model_choice() {
     if (!cfg.curator) cfg.curator = { enabled: false };
     fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
   ' "$cfg" "$session" "$worker" || { echo "  failed to write $cfg"; return 1; }
+
+  # The project's own .lore.json is SHADOWED by the shared config mounted at
+  # /app/.lore.json (see docker-compose.yml), so writing only here would look
+  # correct and change nothing. Mirror the choice into the shared file, which is
+  # what the container actually reads for every project.
+  write_shared_config "$session" "$worker" || return 1
 
   # The worker goes to both places on purpose: .lore.json keeps a project
   # self-describing for anyone reading it, while the env var is what actually
