@@ -35,4 +35,17 @@ RUN node -e 'const fs=require("fs");const p="/usr/local/lib/node_modules/@loreai
 EXPOSE 3207
 # --host 0.0.0.0 is required: the CLI binds 127.0.0.1 by default, which
 # would make the published port unreachable from the host.
-CMD ["lore", "start", "--local", "--port", "3207", "--host", "0.0.0.0"]
+#
+# No --local, deliberately: `lore start`'s documented defaults are hosted mode ON
+# and remote-gateway mode ON, which is what this container needs — it IS the
+# remote gateway, and its project root is a bind mount at /app, not a path on the
+# client. Passing --local switches both off, which is how the startup banner ends
+# up printing
+#   remote gateway mode OFF (cwd fallback active)
+#   LORE_HOSTED_MODE ... (current: false)     [should default true for `start`]
+# and every session then has no project signal to attribute memory to. Those
+# settings are read per request, so the same container now logs some turns with
+# remoteGateway=false and later ones with true. Upgrade path: if a future gateway
+# makes the hosted defaults wrong for a containerised gateway, pass the flags it
+# wants explicitly instead of reaching for --local.
+CMD ["lore", "start", "--port", "3207", "--host", "0.0.0.0"]

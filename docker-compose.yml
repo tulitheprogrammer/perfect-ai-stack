@@ -10,7 +10,13 @@ services:
       # so a recreate doesn't re-download the compression model
       - ${AI_STACK_DATA_DIR:-./data}/headroom:/data/headroom
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Only referenced when an anthropic/* model is added to config/litellm.yaml,
+      # which needs claude-* and this key. Pass it through only when it is set:
+      # naming it unconditionally made Compose warn
+      #   'The "ANTHROPIC_API_KEY" variable is not set'
+      # on every single start of the default (Ollama-only) setup — see README
+      # troubleshooting.
+      - ANTHROPIC_API_KEY
       # config/litellm.yaml reads the DeepSeek key as DEEPSEEK_API_KEY (the name
       # LiteLLM's own deepseek/ provider expects). OPENAI_API_KEY is the older
       # name from when this stack was OpenAI-first, so each falls back to the
