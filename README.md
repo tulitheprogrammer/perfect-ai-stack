@@ -203,16 +203,29 @@ configuration docs for the full schema.
 
 ## Model selection
 
-You choose which models your session and Lore's background workers use.
-Selection is **per project**, stored in `.lore.json` at your project root, so
-switching models needs no restart and doesn't affect other projects.
+You choose which models your session and Lore's background workers use. Both are
+**global** — one choice covers every project on this machine — so `lat.md/` and
+`.lore.md` stay per-project while models do not.
+
+Two channels carry the selection, and they are not equivalent:
+
+| Setting | Channel                                                               | Scope  | Takes effect |
+| ------- | --------------------------------------------------------------------- | ------ | ------------ |
+| worker  | `LORE_WORKER_MODEL` env (`docker-compose.yml`, overridable in `.env`) | global | recreate     |
+| session | `config/lore.json` → `/app/.lore.json`                                | global | next request |
+
+The worker model comes from the **environment** (checked first, returned
+immediately); the session model is config-only, because no env var exists for it.
+`ai-stack models` writes both, so you rarely need to think about the split.
 
 ```sh
 npx perfect-ai-stack models                              # show current + change
 npx perfect-ai-stack models qwen3:8b ministral-3:8b   # session, then worker
 ```
 
-That writes `.lore.json`:
+That writes `config/lore.json` in the stack and `LORE_WORKER_MODEL` in the stack
+`.env` (and mirrors the pair into the calling project's `.lore.json`, which is
+shadowed by the shared mount):
 
 ```json
 {
@@ -221,11 +234,17 @@ That writes `.lore.json`:
 }
 ```
 
+`config/lore.json` is bind-mounted, so an edit applies on the next request. The
+worker's env var is baked at container creation, so a worker change needs
+`docker compose up -d --force-recreate lore` — `models` prints that command.
+Mechanics and the fallbacks behind them: see
+[One stack, many projects](#what-is-shared-and-what-is-per-project).
+
 With no selection stored yet, a bare `models` writes the defaults (`qwen3:8b` for
 both) before printing them, so what it reports as the current selection is always
-what `.lore.json` actually contains. An **existing** selection is never
-overwritten by that — only `models <session> [worker]`, `--reset`, or the
-interactive menu change it. `--reset` restores the default pair.
+what the files actually contain. An **existing** selection is never overwritten by
+that — only `models <session> [worker]`, `--reset`, or the interactive menu change
+it. `--reset` restores the default pair.
 
 - **session** — the model your IDE chat uses.
 - **worker** — distillation, curation, query expansion (background, async).
@@ -241,13 +260,15 @@ interactive menu change it. `--reset` restores the default pair.
   `lat.md` cannot hold (it describes code structure; the curator captures
   session facts). It needs a capable model — see the measured table below.
 
-- Omitting `workerModel` falls back to the session model, then to
-  `LORE_WORKER_MODEL` (env default `openai/qwen3:8b`).
-- Existing keys in `.lore.json` (e.g. `knowledge`) are preserved, and an
-  explicit `curator` setting is never overwritten by a re-run.
+- Omitting `workerModel` falls back to the session model, then to the gateway's
+  own default.
+- Existing keys in the file (e.g. `knowledge`) are preserved, and an explicit
+  `curator` setting is never overwritten by a re-run.
 - Both `providerID`s are `openai` because every model here is reached through
   LiteLLM over the OpenAI protocol. **Don't split providers** — cross-provider
-  worker calls fail (wrong credentials, wrong API format).
+  worker calls fail (wrong credentials, wrong API format). A name this stack does
+  not serve (any `claude-*`) 400s; see
+  [Troubleshooting](#400-on-v1messages-naming-claude-sonnet-4-6-a-model-you-never-chose).
 
 ### Changing models later
 
@@ -571,33 +592,65 @@ shared gateway (see “IDE / agent setup”).
 
 ### What is shared and what is per-project
 
-Lore resolves the **worker** model in this order (see
-`packages/gateway/src/worker-model.ts`):
+**Model selection is shared; knowledge is per-project.** That is the intended
+shape of a one-stack/many-projects setup:
 
-| Priority | Source                                               | Scope                    |
-| -------- | ---------------------------------------------------- | ------------------------ |
-| 1        | `LORE_WORKER_MODEL` env                              | **all projects**         |
-| 2        | `.lore.json` → `workerModel`                         | the mounted project only |
-| 3        | cost-aware default (cheaper same-family model)       | per session              |
-| 4        | `.lore.json` → `model`, else the session's own model | per project              |
-| 5        | the provider's built-in default                      | —                        |
+| Thing                       | Scope       | How it reaches the container           |
+| --------------------------- | ----------- | -------------------------------------- |
+| session + worker model      | **global**  | `config/lore.json` → `/app/.lore.json` |
+| `lat.md/` knowledge graph   | per project | lives in each repo (bind-mounted)      |
+| `.lore.md` exported entries | per project | lives in each repo (bind-mounted)      |
+| `data/lore/` memory DB      | global      | one DB, rows keyed by project          |
 
-`ai-stack models <session> <worker>` therefore writes the worker to the stack
-`.env` **as well as** the project's `.lore.json`:
+`config/lore.json` is mounted **read-only at `/app/.lore.json`**, layered after
+the project mount. One edit changes the models for every project; because it is a
+file mount rather than an environment variable, it takes effect on the next
+request with **no recreate** — unlike `${VAR}`, which Compose bakes at container
+creation.
 
-- the **`.env` entry is what takes effect** — priority 1 is returned before the
-  config file is even read, so it applies to every project on the machine;
-- the `.lore.json` entry is kept so the project stays self-describing (and so a
-  clone of it behaves correctly on its own).
+#### How the worker model resolves (read from the bundle)
 
-The **session** model is genuinely per-project and lives only in `.lore.json`.
-Because one container mounts one directory at `/app` (see below), a second
-project's `.lore.json` session model only applies when the gateway is started
-against that project:
+The resolver checks the **environment first and returns immediately**:
 
-```sh
-cd ~/code/project-b && ai-stack stop && ai-stack init
+```js
+function $be(e) {                        // "openai/qwen3:8b" -> {providerID, modelID}
+  if (!e) return;
+  let t = e.indexOf("/");
+  return t > 0 ? { providerID: e.slice(0,t), modelID: e.slice(t+1) }
+               : { providerID: "anthropic", modelID: e };   // NO SLASH -> anthropic
+}
+
+function ea(e) {
+  let t = $be(process.env.LORE_WORKER_MODEL);
+  if (t) return t;                       // env wins; config never consulted
+  let r = Xe(), ...                      // .lore.json is the fallback
+}
 ```
+
+So `LORE_WORKER_MODEL` **is** the highest-priority source — this is the setting
+that spans projects. Two consequences worth knowing:
+
+- The `/` is load-bearing. A value with no slash is parsed as an **Anthropic**
+  model, which against this stack's LiteLLM 400s on `/v1/messages` naming a model
+  like `claude-sonnet-4-6`. Always keep the `openai/` prefix.
+- `.lore.json` is consulted only when the env var is unset or unparsable.
+
+#### The session model has no env var — that is what `config/lore.json` is for
+
+The worker falls back to config; the **session** model is config-only. When the
+gateway's config is empty it takes a hardcoded default this stack cannot serve:
+
+```js
+Xe().model ?? { providerID: "anthropic", modelID: "claude-sonnet-4-6" };
+```
+
+and the config loader parses `{}` silently when the file is absent — no error.
+One container mounts one directory at `/app`, so a per-project file can only ever
+describe the mounted project. `config/lore.json`, mounted read-only at
+`/app/.lore.json`, is what makes that selection span every project.
+
+Edit `config/lore.json` (or run `ai-stack models`) to change models. A selection
+recorded in a project's own `.lore.json` is shadowed by the shared mount.
 
 `init` says so explicitly when the running gateway is mounted elsewhere, rather
 than skipping in silence.
@@ -707,14 +760,39 @@ local single-user stack; don't expose port `4000` beyond your machine.
 
 ### Lore (Docker)
 
-| Variable                  | Purpose                         | Default                         |
-| ------------------------- | ------------------------------- | ------------------------------- |
-| `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream      | `http://litellm:4000`           |
-| `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream              | `http://litellm:4000`           |
-| `LORE_WORKER_UPSTREAM`    | Upstream for background workers | `http://litellm:4000`           |
-| `LORE_WORKER_MODEL`       | Background worker model         | `openai/qwen3:8b`               |
-| `LORE_WORKER_API_KEY`     | Key used for worker calls       | `sk-litellm-master` (any works) |
-| `LORE_DEBUG`              | Enable debug logging            | `true`                          |
+| Variable                  | Purpose                          | Default                         |
+| ------------------------- | -------------------------------- | ------------------------------- |
+| `LORE_UPSTREAM_OPENAI`    | OpenAI-compatible upstream       | `http://litellm:4000`           |
+| `LORE_UPSTREAM_ANTHROPIC` | Anthropic upstream               | `http://litellm:4000`           |
+| `LORE_WORKER_UPSTREAM`    | Upstream for background workers  | `http://litellm:4000`           |
+| `LORE_WORKER_MODEL`       | Background worker model          | `openai/qwen3:8b`               |
+| `LORE_WORKER_API_KEY`     | Key used for worker calls        | `sk-litellm-master` (any works) |
+| `LORE_BATCH_DISABLED`     | Disable Lore's batch worker path | `1` (**string**, not `true`)    |
+| `LORE_BATCH_ENABLED`      | (not read; see below)            | —                               |
+
+`LORE_BATCH_DISABLED=1` must stay set on this stack. LiteLLM serves no Batch or
+File API, so the batch path only ever produces a failed `/v1/files` upload whose
+inline fallback rebuilds the call from the **session's** provider — silently
+replacing the worker model you configured and, after three failures, degrading
+`lore-distill` to a stop. See
+[Troubleshooting](#openai-file-upload-failed-400-then-claude-sonnet-4-6-400s).
+
+**The value must be `1`, not `true`.** The gateway compares with strict equality:
+
+```js
+process.env.LORE_BATCH_DISABLED === "1";
+```
+
+so `true` is silently falsy, the batch path stays enabled, and nothing in the log
+says why. The startup banner is the tell — it prints the result of that same
+comparison:
+
+```
+LORE_BATCH_DISABLED     Disable batch background work (current: false)
+```
+
+`current: false` with the variable set means the _value_ is wrong, not that the
+flag is missing.
 
 `LORE_WORKER_MODEL` is a `provider/model` pair. The part after the slash is the
 model name sent to `LORE_WORKER_UPSTREAM` and **must exist in LiteLLM's
@@ -1104,8 +1182,14 @@ clone but not in the directory you ran `init` from.
 WARN[0000] The "ANTHROPIC_API_KEY" variable is not set. Defaulting to a blank string.
 ```
 
-Expected and harmless unless you use `claude-*` models. It's Compose
-interpolating an unset optional variable at startup. Set it, or ignore it.
+Fixed — it no longer appears. `docker-compose.yml` passes the variable through
+unconditionally (it names it but does not reference it), so Compose warns on
+every start of the default Ollama-only setup, where no Anthropic key exists to
+set. The variable is now only referenced when a model needs it.
+
+Look at the warning, not the key: it is Compose interpolating an unset optional
+variable, so it never indicated a stack fault. If you still see it on an old
+checkout, this is what it meant.
 
 ### Changes to environment variables have no effect
 
@@ -1156,40 +1240,24 @@ for the recreate step.
 
 ### Worker calls fail with "Invalid model name" for a model you did not choose
 
-```
-[lore] worker upstream request failed: 400 — model=anthropic/claude-sonnet-4-6
-```
+See
+[400 on `/v1/messages` naming `claude-sonnet-4-6`](#400-on-v1messages-naming-claude-sonnet-4-6-a-model-you-never-chose) —
+same fault, and the section there covers the `claude-sonnet-4-6` literal, the
+empty-config loader, and the DB query that shows which model actually ran.
 
-Lore picked a worker you never selected. Cause: neither `LORE_WORKER_MODEL`
-nor a readable `.lore.json` resolved, so it fell through to the provider's
-built-in default (Anthropic's is a Sonnet), which this stack's
-`config/litellm.yaml` does not serve.
+The historical workaround for this — recreating the container against a different
+project so its `.lore.json` becomes readable — is **no longer needed**: model
+selection now comes from the shared `config/lore.json` mount, which spans every
+project regardless of which one is mounted at `/app`.
 
-The usual root cause is the **project mount**, not the config: one container
-mounts one directory at `/app`, so if the gateway was started from a different
-project (or from the stack directory itself), your `.lore.json` is invisible.
-Check both:
+If you still see it, the mount is not the cause — check what the container sees:
 
 ```sh
-docker exec ai-lore printenv LORE_WORKER_MODEL
-docker inspect ai-lore --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+docker exec ai-lore cat /app/.lore.json
 ```
 
-Fix by setting the shared worker (which applies regardless of the mount):
-
-```sh
-cd ~/code/your-project
-npx perfect-ai-stack models <session-model> <worker-model>
-```
-
-`models` prints the exact recreate command to run — copy it. It has to carry
-`AI_STACK_PROJECT_DIR=<your project>`, because that variable is what Compose
-mounts at `/app`: running `docker compose up -d --force-recreate lore` from the
-stack directory without it re-mounts the **stack** at `/app`, which is the
-problem you are trying to fix.
-
-Note `init` warns when the running gateway is mounted to a different project;
-if you saw that warning and ignored it, this is the consequence.
+An absent file means the shared-config mount is missing from your
+`docker-compose.yml`; pull the current one and recreate.
 
 ### Distillation is running but nothing is being learned (`worker empty response`)
 
@@ -1222,6 +1290,151 @@ Then recreate LiteLLM (`docker compose up -d --force-recreate litellm`); the
 config is mounted, so a restart is not enough. The shipped `qwen3:8b` entry
 already has this, so you only hit it with a thinking model you added yourself.
 
+### `openai file upload failed: 400` then `claude-sonnet-4-6` 400s
+
+```
+[lore] batch flush (openai): submitting 1 requests
+[lore] openai file upload failed: 400 — {"error":{"message":"Invalid JSON payload: unexpected character: line 1 column 2 (char 1)"}}
+[lore] batch fallback: processing 1 items synchronously
+[lore] worker upstream request failed: 400 — model=anthropic/claude-sonnet-4-6 worker=lore-distill
+[lore] [worker-health] lore-distill degraded: 3 failures in 5min
+```
+
+These are one bug, and it is the worst failure mode in this stack because the
+end state is silent: after 3 failures in 5 minutes `lore-distill` is marked
+**degraded and stops running**, so `.lore.md` never fills again. In the DB this
+shows as every `distillations` row having `call_type='batch'` and
+distillation timestamps that stop dead.
+
+Two stacked defects, both on the batch path:
+
+1. **LiteLLM implements no Batch/File API.** The 400 comes from LiteLLM failing
+   to parse the body at all (the `line 1 column 2` character is the first byte of
+   `multipart/form-data`, read as JSON), so it never reaches a model and the error
+   names none. This is unrecoverable by configuration.
+2. **The inline fallback rebuilds the call from the SESSION's provider, not the
+   worker's.** So a worker you configured as `ministral-3:8b` comes back as
+   `anthropic/claude-sonnet-4-6` (sent to `/v1/messages`, which serves no such
+   model), or as the default `qwen3:8b`. The configured worker model is silently
+   discarded.
+
+Diagnose it from the database, which is authoritative — the log is ambiguous
+because the fallback's model name never appears next to your configuration:
+
+```sh
+sqlite3 ~/.ai-stack/lore/lore.db \
+  "SELECT call_type, worker_model_id, COUNT(*) n FROM distillations GROUP BY 1,2;"
+```
+
+`call_type='batch'` rows are the broken path; `worker_model_id` is what actually
+ran, so it will disagree with `.env`/`.lore.json` when the fallback took over.
+
+**The fix is `LORE_BATCH_DISABLED=1`** in the `lore` service's environment. The
+value is the **string `1`** — the gateway tests it with
+`process.env.LORE_BATCH_DISABLED === "1"`, so `true` reads as falsy and the batch
+path keeps running with no error to explain it. Lore's banner prints the same
+comparison, which is the quickest confirmation:
+
+```
+LORE_BATCH_DISABLED     Disable batch background work (current: false)
+```
+
+`current: false` while the variable is set means the value is not `1`.
+After setting it, recreate — it is baked at container creation:
+
+```sh
+AI_STACK_PROJECT_DIR='<your project>' docker compose up -d --force-recreate lore
+```
+
+Then confirm the banner flipped and the failures stopped:
+
+```sh
+docker compose logs lore | grep -E 'LORE_BATCH_DISABLED|batch flush|worker-health'
+```
+
+Expect `(current: true)` and no further `batch flush` lines. Already-degraded
+sessions stay degraded until the worker-health window clears, so recreate rather
+than waiting for it.
+
+Also keep these correct, since a batch failure only turns into a Sonnet 400 when
+the fallback has nowhere valid to land:
+
+- `LORE_WORKER_MODEL` must name an `openai/` model (the protocol LiteLLM serves
+  here). An unresolvable provider ID is what sends the fallback to
+  `/v1/messages`.
+- Keep `LORE_WORKER_UPSTREAM=http://litellm:4000` (bare root, no `/v1`).
+
+### 400 on `/v1/messages` naming `claude-sonnet-4-6` (a model you never chose)
+
+```
+[lore] worker upstream request failed: 400 — url=http://litellm:4000 model=anthropic/claude-sonnet-4-6 worker=lore-distill
+litellm: anthropic_messages: Invalid model name passed in model=claude-sonnet-4-6
+```
+
+Lore is requesting a model this stack cannot serve. Two independent causes produce
+this exact symptom, so identify which before changing anything.
+
+**Cause 1 — `LORE_WORKER_MODEL` missing, unset, or without its `/`.** The worker
+resolver parses that env var and returns immediately, falling back to config only
+when it is absent, and a value with **no slash** is read as an `anthropic` model:
+
+```js
+function $be(e) {
+  let t = e.indexOf("/");
+  return t > 0
+    ? { providerID: e.slice(0, t), modelID: e.slice(t + 1) }
+    : { providerID: "anthropic", modelID: e }; // no slash -> anthropic
+}
+```
+
+So `claude-sonnet-4-6` here can mean the variable was literally set to a bare
+name. Check what the container has:
+
+```sh
+docker exec ai-lore printenv LORE_WORKER_MODEL      # expect openai/<model>
+```
+
+**Cause 2 — the config is empty, so the SESSION model took its hardcoded default:**
+
+```js
+Xe().model ?? { providerID: "anthropic", modelID: "claude-sonnet-4-6" };
+```
+
+The loader parses `{}` silently when `.lore.json` is absent, and `Xe()` caches that
+result. See
+[The session model has no env var](#the-session-model-has-no-env-var--that-is-what-configlorejson-is-for).
+
+```sh
+docker exec ai-lore cat /app/.lore.json              # expect model/workerModel keys
+```
+
+Either way the fallback is guaranteed to 400: this stack serves neither
+`claude-sonnet-4-6` nor any `/v1/messages` model.
+
+**This symptom does not describe your configuration.** Nothing in the log names
+your actual selection, which is why it reads as "the stack ignores my model".
+Diagnose from what ran rather than what was requested:
+
+```sh
+docker exec ai-lore ls -l /app/.lore.json
+docker exec ai-lore cat /app/.lore.json
+```
+
+- **Absent** → the shared-config mount is missing (upgrade or re-clone
+  `docker-compose.yml`), and every session falls back to Sonnet.
+- **Present but wrong/no `model`** → edit `config/lore.json` and retry; a file
+  mount needs no recreate.
+- **Present and correct** → then the failure is the batch path swapping the call;
+  verify `LORE_BATCH_DISABLED=1` ([below](#openai-file-upload-failed-400-then-claude-sonnet-4-6-400s)).
+
+Diagnose from the database, which records the model that actually ran rather than
+the one requested:
+
+```sh
+sqlite3 ~/.ai-stack/lore/lore.db \
+  "SELECT call_type, worker_model_id, COUNT(*) n FROM distillations GROUP BY 1,2;"
+```
+
 ### Requests fail with "model group ... not found"
 
 The model name your client sent isn't in LiteLLM's `model_list`. List what is
@@ -1248,10 +1461,33 @@ This is a property of the model and the budget, not a stack fault.
 [lore] warning: could not determine project for session ... — falling back to process.cwd() (/app)
 ```
 
+Plus, in the same run:
+
+```
+[lore] remote gateway mode OFF (cwd fallback active) — set LORE_REMOTE_GATEWAY=1 for long-running/remote setups
+[lore] embedding worker crashed: Error: ENOENT: process.cwd failed ... uv_cwd
+[lore] read worker job failed; using in-process fallback: ... uv_cwd
+[lore] WARN: Vector scoring failed, falling back to FTS5: LocalProviderUnavailableError
+```
+
+Harmless in a single-project stack; the fallback (`/app`) is the mounted project,
+so memory lands in the right place. **Multi-project** stacks are where it bites:
+every session is attributed to whichever project the container was started
+against.
+
 Lore can't tell which project a session belongs to, so memory may be
 misattributed. Fix by launching your agent through `lore run`, or by having the
 client send an `X-Lore-Project: /path/to/project` header (for Claude Code,
-`ANTHROPIC_CUSTOM_HEADERS`). Harmless in a single-project stack.
+`ANTHROPIC_CUSTOM_HEADERS`).
+
+The `uv_cwd` cluster is not a second bug: Lore runs its embedding and read work in
+worker **threads**, and a thread inherits the process's current working
+directory. When the gateway restarts, `/app` (a bind mount, so its inode changes
+on every recreate) is gone from underneath the old workers. They cannot even ask
+for their own `cwd`, so every worker job fails and the gateway falls back to
+in-process work — which is why it then logs `vector worker pool disabled` and
+`Recall will use FTS-only search`. Recreating the container clears it; recall is
+degraded to keyword search until you do.
 
 ### Recall degrades to keyword search only
 
@@ -1260,12 +1496,16 @@ LocalProviderUnavailableError: '@huggingface/transformers' failed to initialize.
 Recall will use FTS-only search.
 ```
 
-The local embedding provider is missing. The image installs it
-(`Dockerfile`), so this means a stale image — rebuild:
+On a fresh container the local embedding provider is missing, which means a
+stale image — the image installs it (`Dockerfile`). Rebuild:
 
 ```sh
 npx perfect-ai-stack update
 ```
+
+If it appears mid-session rather than at startup, it is the worker-crash case
+above (a recreate is the fix), not a missing provider: check the log for
+`uv_cwd` first.
 
 Related: the gateway's embedding model needs shared memory, so `shm_size` is
 raised to 1GB in `docker-compose.yml`. Lowering it can push the WASM fallback
