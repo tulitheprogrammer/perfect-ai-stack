@@ -63,6 +63,22 @@ services:
       # `update`) reuses it instead of re-downloading, and a truncated download
       # caused by a killed container can't poison the image layer.
       - ${AI_STACK_DATA_DIR:-./data}/lore-cache:/usr/local/lib/node_modules/@loreai/gateway/.cache
+      # One model selection for every project. The gateway reads
+      # `<projectDir>/.lore.json` and, when the file is missing or has no
+      # `.model`, falls back to a HARDCODED anthropic/claude-sonnet-4-6 — which
+      # this stack does not serve, so every call 400s. In a shared gateway one
+      # container has one /app, so a per-project file can only ever describe the
+      # mounted project; a file mount is the only channel that spans projects.
+      #
+      # Layered AFTER the /app mount on purpose: a bind mount is a directory
+      # overlay, so a later file mount at /app/.lore.json wins over the project's
+      # own file. lat.md/ and .lore.md/ stay genuinely per-project (they live in
+      # each repo and reach the container via the mounts above).
+      #
+      # A file mount rather than a ${VAR}: unlike env vars, which Compose bakes at
+      # container creation, an edit here is picked up on the next request — no
+      # --force-recreate needed to change models.
+      - ./config/lore.json:/app/.lore.json:ro
     environment:
       # Bare roots, no trailing /v1: Lore appends the API path itself
       # (gateway builds `${upstreamAnthropic}/v1/models`), so a /v1 suffix
