@@ -95,6 +95,21 @@ services:
       - LORE_WORKER_MODEL=${LORE_WORKER_MODEL:-openai/qwen3:8b}
       # Worker -> LiteLLM calls use a dedicated key (any key works: auth is off)
       - LORE_WORKER_API_KEY=${LITELLM_MASTER_KEY:-sk-litellm-master}
+      # LiteLLM implements no Batch/File API, so Lore's batch path can never
+      # succeed — and it is not a harmless failed request. The inline fallback
+      # rebuilds the call from the SESSION's provider instead of the worker's, so
+      # a configured worker is silently replaced (observed: ministral-3:8b ->
+      # anthropic/claude-sonnet-4-6, sent to /v1/messages, which serves no such
+      # model). After 3 failures in 5min, lore-distill is marked degraded and
+      # stops running entirely, so .lore.md never fills.
+      #
+      # The value MUST be "1", not "true". The gateway compares with strict
+      # equality in three places:
+      #   process.env.LORE_BATCH_DISABLED === "1"
+      # so "true" is silently falsy and the batch path stays on. The startup
+      # banner reports this as `(current: false)`, which is the check above
+      # returning false — not a missing flag.
+      - LORE_BATCH_DISABLED=1
       - LORE_DEBUG=${LORE_DEBUG:-true}
     depends_on:
       - litellm
