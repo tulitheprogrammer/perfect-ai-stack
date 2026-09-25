@@ -26,6 +26,10 @@
 #    invisible to every project except the mounted one — the env var is the only
 #    channel that spans projects. write_shared_worker must therefore persist it
 #    to the stack .env WITHOUT disturbing the user's other lines.
+# 5. Startup flags that only look like noise. Compose naming an unset optional
+#    key, Lore flushing a Batch API LiteLLM does not serve, and `lore start
+#    --local` turning off the container's hosted/remote-gateway defaults each
+#    printed a warning that read as ambient but described a real fault.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -343,6 +347,93 @@ else
   fails=$((fails + 1))
 fi
 
+# ── 9: startup noise that was a stack fault, not a harmless warning ─────────
+
+# Each of these printed on every start / every distillation flush and looked like
+# ambient noise, which is exactly why they must not come back: the batch one was
+# retrying a request that can never succeed (and addressing it at api.openai.com
+# on a local-first stack), and the ANTHROPIC one warned about a key the default
+# Ollama-only setup has no reason to own.
+
+# `environment: - ANTHROPIC_API_KEY` (no =) passes the host value through only
+# when it is set. The `=${ANTHROPIC_API_KEY}` form names an unset variable, which
+# is what makes Compose warn on every start.
+if grep -qE '^[[:space:]]*-[[:space:]]*ANTHROPIC_API_KEY[[:space:]]*$' docker-compose.yml; then
+  echo "  ok   ANTHROPIC_API_KEY passed through without interpolation"
+else
+  echo "  FAIL ANTHROPIC_API_KEY is interpolated — Compose warns on every start"
+  fails=$((fails + 1))
+fi
+
+# LORE_BATCH_DISABLED must be the STRING "1". The gateway compares with strict
+# equality in three places:
+#   process.env.LORE_BATCH_DISABLED === "1"
+# so "true" is silently falsy and the batch path stays enabled — LiteLLM serves no
+# batch endpoint, its inline fallback then rebuilds the worker call from the
+# SESSION's provider, and lore-distill degrades to a stop. The startup banner
+# reports the failing case as `(current: false)`, which is this comparison, not a
+# missing flag.
+if grep -qE '^[[:space:]]*-[[:space:]]*LORE_BATCH_DISABLED=1$' docker-compose.yml; then
+  echo "  ok   LORE_BATCH_DISABLED=1 (string form the gateway compares against)"
+else
+  echo "  FAIL LORE_BATCH_DISABLED is not =1 — 'true' is silently falsy (strict ===)"
+  fails=$((fails + 1))
+fi
+
+# The batch path is what silently swaps the worker model: its inline fallback
+# rebuilds the call from the SESSION's provider. Observed: a configured
+# ministral-3:8b worker became anthropic/claude-sonnet-4-6 (400, model not served)
+# and qwen3:8b. Those rows are in distillations.call_type='batch'.
+# Lore must reach LiteLLM over the same chat endpoint the session uses, with a
+# provider ID it can resolve, or the batch/flush path has no valid target.
+if grep -qE 'LORE_WORKER_UPSTREAM=.*http://litellm:4000' docker-compose.yml; then
+  echo "  ok   worker upstream points at LiteLLM (bare root, no /v1)"
+else
+  echo "  FAIL worker upstream is not http://litellm:4000"
+  fails=$((fails + 1))
+fi
+
+# LORE_WORKER_MODEL is the HIGHEST-priority worker source: the resolver parses it
+# and returns before the config file is consulted. The `/` is load-bearing — a
+# value with no slash is read as an ANTHROPIC model:
+#
+#   function $be(e) {
+#     let t = e.indexOf("/");
+#     return t > 0 ? { providerID: e.slice(0,t), modelID: e.slice(t+1) }
+#                  : { providerID: "anthropic", modelID: e };   // no slash
+#   }
+#
+# which against this stack's LiteLLM 400s on /v1/messages naming a model like
+# claude-sonnet-4-6 ("Invalid model name passed in"). So every value here must
+# carry an openai/ prefix. Absent .env is fine: the compose default applies.
+if [ ! -f .env ] || grep -qE '^LORE_WORKER_MODEL=openai/[^/]+$' .env; then
+  echo "  ok   LORE_WORKER_MODEL is openai/<model> (slash present, right protocol)"
+else
+  echo "  FAIL LORE_WORKER_MODEL is not openai/<model> — a slashless value parses as anthropic"
+  fails=$((fails + 1))
+fi
+
+# A bare model name is the specific mistake that yields the claude-sonnet-4-6
+# symptom, so assert it is rejected rather than merely discouraged.
+if grep -qE '^LORE_WORKER_MODEL=[^/]+$' .env 2>/dev/null; then
+  echo "  FAIL LORE_WORKER_MODEL has no provider prefix -> parsed as anthropic"
+  fails=$((fails + 1))
+else
+  echo "  ok   no slashless LORE_WORKER_MODEL (would resolve to an anthropic model)"
+fi
+
+# `lore start` defaults to hosted + remote-gateway mode, which is what a
+# containerised gateway needs (its /app is a bind mount). --local flips both off,
+# so every session logs remoteGateway=false / hosted=false and memory has no
+# project signal — the exact state `lore run` and the X-Lore-Project header exist
+# to prevent.
+if grep -qE '^CMD \["lore", "start", "--port"' Dockerfile; then
+  echo "  ok   gateway starts in its hosted/remote-gateway defaults (no --local)"
+else
+  echo "  FAIL Dockerfile passes --local (or changed the start flags) — remote/hosted mode off"
+  fails=$((fails + 1))
+fi
+
 # ── 8: the worker can actually answer ─────────────────────────────────────
 
 # qwen3:8b is a thinking model, and LiteLLM drops Ollama's reasoning channel:
@@ -378,9 +469,133 @@ else
   echo "  skip gateway down — the worker answer check needs the gateway"
 fi
 
+# ── 10: shared model config reaches the container ───────────────────────────
+
+# The gateway reads `<projectDir>/.lore.json` via a loader that parses an EMPTY
+# object when the file is absent:
+#
+#   async function qC(e) {
+#     let t = join(e, ".lore.json")
+#     if (existsSync(t)) return eB = Kpe.parse(JSON.parse(strip(t)))
+#     return eB = Kpe.parse({})          // no file -> {}
+#   }
+#
+# and the session model then takes a HARDCODED fallback:
+#
+#   Xe().model ?? { providerID: "anthropic", modelID: "claude-sonnet-4-6" }
+#
+# LiteLLM serves no claude-sonnet-4-6 here, so a missing .lore.json at /app 400s
+# every session-model resolution. One container has one /app, so with a shared
+# gateway the file must be mounted rather than written per project.
+if grep -qE '^[[:space:]]*-[[:space:]]*\./config/lore\.json:/app/\.lore\.json' docker-compose.yml; then
+  echo "  ok   shared .lore.json mounted at /app (spans every project)"
+else
+  echo "  FAIL no shared .lore.json mount — missing file falls back to hardcoded claude-sonnet-4-6"
+  fails=$((fails + 1))
+fi
+
+# Mount order is load-bearing: a bind mount is a directory overlay, so the file
+# mount must come AFTER the project's /app mount or the project's own (possibly
+# absent) .lore.json shadows it and the fallback returns.
+app_line=$(grep -nE '^[[:space:]]*-[[:space:]]*\$\{AI_STACK_PROJECT_DIR:-[^}]*\}:/app[[:space:]]*$' docker-compose.yml | head -1 | cut -d: -f1)
+lore_line=$(grep -nE '^[[:space:]]*-[[:space:]]*\./config/lore\.json:/app/\.lore\.json' docker-compose.yml | head -1 | cut -d: -f1)
+if [ -n "$app_line" ] && [ -n "$lore_line" ] && [ "$lore_line" -gt "$app_line" ]; then
+  echo "  ok   shared config is layered after the /app mount (overlay wins)"
+else
+  echo "  FAIL shared .lore.json is not layered after the /app mount (app=$app_line lore=$lore_line)"
+  fails=$((fails + 1))
+fi
+
+# The shared config must name a model this stack actually serves, and providerID
+# must be openai/ (the protocol LiteLLM answers). A claude-* name here is the
+# documented cause of "Invalid model name passed in model=...".
+if [ -f config/lore.json ]; then
+  if node -e '
+    const c = JSON.parse(require("fs").readFileSync("config/lore.json", "utf8"));
+    const m = c.model || {}, w = c.workerModel || {};
+    if (!m.modelID || !w.modelID) throw new Error("model/workerModel missing");
+    if (m.providerID !== "openai" || w.providerID !== "openai")
+      throw new Error("providerID must be openai");
+    for (const v of [m.modelID, w.modelID])
+      if (/^(claude|anthropic)/.test(v)) throw new Error("anthropic model " + v);
+  ' 2>/dev/null; then
+    echo "  ok   config/lore.json names served models on the openai provider"
+  else
+    echo "  FAIL config/lore.json is missing, malformed, or names an unserved/anthropic model"
+    fails=$((fails + 1))
+  fi
+else
+  echo "  FAIL config/lore.json does not exist (the compose mount would fail)"
+  fails=$((fails + 1))
+fi
+
+# ── 11: `ai-stack models` writes the file the container reads ───────────────
+
+# The project's own .lore.json is shadowed by the shared /app/.lore.json mount, so
+# writing only there would look correct and change nothing. Exercise the real
+# function against a temp stack dir and assert both files land.
+WS=$(sed -n '/^write_shared_config()/,/^}$/p' bin/ai-stack.sh)
+[ -n "$WS" ] || { echo "  FAIL could not locate write_shared_config"; exit 1; }
+
+ws_tmp=$(mktemp -d)
+mkdir -p "$ws_tmp/config"
+(
+  DIR="$ws_tmp"
+  eval "$WS"
+  write_shared_config "deepseek-flash" "ministral-3:8b"
+) >/dev/null 2>&1 || true
+
+if node -e '
+  const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (c.model.modelID !== "deepseek-flash") throw 0;
+  if (c.workerModel.modelID !== "ministral-3:8b") throw 0;
+  if (c.model.providerID !== "openai") throw 0;
+' "$ws_tmp/config/lore.json" 2>/dev/null; then
+  echo "  ok   write_shared_config writes model+workerModel for the container"
+else
+  echo "  FAIL write_shared_config did not produce a parsable shared config"
+  fails=$((fails + 1))
+fi
+
+# Unrelated keys must survive a re-run, or editing models would wipe curation
+# settings and anything else a user added.
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const c = JSON.parse(fs.readFileSync(p, "utf8"));
+  c.knowledge = { enabled: false };
+  fs.writeFileSync(p, JSON.stringify(c, null, 2));
+' "$ws_tmp/config/lore.json"
+(
+  DIR="$ws_tmp"
+  eval "$WS"
+  write_shared_config "qwen3:8b" "qwen3:8b"
+) >/dev/null 2>&1 || true
+
+if node -e '
+  const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (c.model.modelID !== "qwen3:8b") throw 0;
+  if (!c.knowledge || c.knowledge.enabled !== false) throw 0;
+' "$ws_tmp/config/lore.json" 2>/dev/null; then
+  echo "  ok   shared config keeps unrelated keys across a model change"
+else
+  echo "  FAIL write_shared_config clobbered unrelated keys"
+  fails=$((fails + 1))
+fi
+
+# Both writers must be wired into write_model_choice, or `ai-stack models` updates
+# one channel and leaves the other stale, which reads as "my change did nothing".
+if sed -n '/^write_model_choice()/,/^}$/p' bin/ai-stack.sh | grep -q 'write_shared_config'; then
+  echo "  ok   models writes the shared config (not only the shadowed project file)"
+else
+  echo "  FAIL write_model_choice never calls write_shared_config"
+  fails=$((fails + 1))
+fi
+rm -rf "$ws_tmp"
+
 echo ""
 if [ "$fails" -eq 0 ]; then
-  echo "PASS: wizard keys + menu + model advice + list dedup + defaults + shared worker + mount + worker answer (24 cases)"
+  echo "PASS: wizard keys + menu + model advice + list dedup + defaults + shared worker + mount + startup flags + shared config + models-write + worker answer (38 cases)"
 else
   echo "FAIL: $fails case(s)"
   exit 1
